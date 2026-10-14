@@ -58,7 +58,7 @@ export default function OperatorPage() {
   // Trigger 8 besar final bracket generation
   const handleGenerateFinalBracket = () => {
     const arenaMatches = dbService.getMatches(selectedArena);
-    const result = processCutoffAndGenerateFinals(arenaMatches, 200);
+    const result = processCutoffAndGenerateFinals(arenaMatches, settings, 200);
 
     if (result.advancedMatches.length === 0) {
       setAlertMsg('Belum ada partai penyisihan dengan skor selesai untuk menghasilkan 8 besar.');

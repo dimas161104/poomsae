@@ -137,7 +137,7 @@ export default function JudgeStationPage() {
 
             // Check draft recovery from localStorage
             try {
-              const draftKey = `poomsae_draft_${match.id}_${judgePosition}`;
+              const draftKey = `poomsae_draft_${current.id}_${judgePosition}`;
               const savedDraft = localStorage.getItem(draftKey);
               if (savedDraft) {
                 const parsed = JSON.parse(savedDraft);

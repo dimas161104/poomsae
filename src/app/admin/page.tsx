@@ -253,7 +253,7 @@ function AdminContent() {
   // Cut-off & Bracket Generation
   const handleRunCutoff = () => {
     const arenaMatches = matches.filter(m => m.arena_code === selectedArenaConsole);
-    const result = processCutoffAndGenerateFinals(arenaMatches, 300);
+    const result = processCutoffAndGenerateFinals(arenaMatches, settings, 300);
     if (result.advancedMatches.length === 0) {
       setAlertMessage('Belum ada partai penyisihan dengan skor selesai untuk diproses cut-off.');
       return;
@@ -275,14 +275,14 @@ function AdminContent() {
       arena_code: arena,
       athlete_id: athlete.id,
       athlete,
-      category_name: athlete.category_name,
+      category_name: athlete.category_name || '',
       category_type: athlete.category_type,
       level: athlete.level,
       participation_type: athlete.participation_type,
       round: athlete.level === 'pemula' ? 'final' : 'penyisihan',
       forms_count: athlete.category_type === 'speed_kick' ? 1 : settings.forms_count,
       poomsae_1: athlete.category_type === 'speed_kick' ? 'Speed Kicking 60 Detik' : 'Taegeuk 1 Jang',
-      poomsae_2: (athlete.category_type === 'speed_kick' || settings.forms_count === 1) ? null : 'Taegeuk 2 Jang',
+      poomsae_2: (athlete.category_type === 'speed_kick' || settings.forms_count === 1) ? undefined : 'Taegeuk 2 Jang',
       active_form: 1,
       status: 'menunggu',
       is_current: false,
@@ -328,14 +328,14 @@ function AdminContent() {
           arena_code: targetArena,
           athlete_id: ath.id,
           athlete: ath,
-          category_name: ath.category_name,
+          category_name: ath.category_name || '',
           category_type: ath.category_type,
           level: ath.level,
           participation_type: ath.participation_type,
           round: 'final',
           forms_count: ath.category_type === 'speed_kick' ? 1 : settings.forms_count,
           poomsae_1: ath.category_type === 'speed_kick' ? 'Speed Kicking 60 Detik' : 'Taegeuk 1 Jang',
-          poomsae_2: null,
+          poomsae_2: undefined,
           active_form: 1,
           status: 'menunggu',
           is_current: false,
