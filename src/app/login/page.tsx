@@ -46,13 +46,11 @@ export default function LoginPage() {
     setError(null);
 
     try {
-      document.cookie = `admin_session=true; path=/; max-age=86400`;
-      document.cookie = `user_role=admin; path=/; max-age=86400`;
-      setLoading(false);
-      router.push('/admin');
+      document.cookie = `admin_session=true; path=/; max-age=86400; SameSite=Lax`;
+      document.cookie = `user_role=admin; path=/; max-age=86400; SameSite=Lax`;
+      window.location.href = '/admin';
     } catch {
-      setLoading(false);
-      router.push('/admin');
+      window.location.href = '/admin';
     }
   };
 
@@ -63,13 +61,12 @@ export default function LoginPage() {
     setError(null);
 
     try {
-      document.cookie = `operator_session=${JSON.stringify({ username: operatorUsername, arena: operatorArena })}; path=/; max-age=86400`;
-      document.cookie = `user_role=operator; path=/; max-age=86400`;
-      setLoading(false);
-      router.push('/operator');
+      const payload = encodeURIComponent(JSON.stringify({ username: operatorUsername, arena: operatorArena }));
+      document.cookie = `operator_session=${payload}; path=/; max-age=86400; SameSite=Lax`;
+      document.cookie = `user_role=operator; path=/; max-age=86400; SameSite=Lax`;
+      window.location.href = '/operator';
     } catch {
-      setLoading(false);
-      router.push('/operator');
+      window.location.href = '/operator';
     }
   };
 
@@ -81,13 +78,12 @@ export default function LoginPage() {
 
     try {
       const pinStr = juriPins.join('');
-      document.cookie = `judge_session=${JSON.stringify({ judge_code: juriCode, pin: pinStr, arena: juriArena, position: juriPosition })}; path=/; max-age=86400`;
-      document.cookie = `user_role=juri; path=/; max-age=86400`;
-      setLoading(false);
-      router.push('/juri');
+      const payload = encodeURIComponent(JSON.stringify({ judge_code: juriCode, pin: pinStr, arena: juriArena, position: juriPosition }));
+      document.cookie = `judge_session=${payload}; path=/; max-age=86400; SameSite=Lax`;
+      document.cookie = `user_role=juri; path=/; max-age=86400; SameSite=Lax`;
+      window.location.href = '/juri';
     } catch {
-      setLoading(false);
-      router.push('/juri');
+      window.location.href = '/juri';
     }
   };
 
@@ -98,13 +94,12 @@ export default function LoginPage() {
     setError(null);
 
     try {
-      document.cookie = `monitor_session=${JSON.stringify({ access_code: accessCode, arena: monitorArena })}; path=/; max-age=86400`;
-      document.cookie = `user_role=media; path=/; max-age=86400`;
-      setLoading(false);
-      router.push('/media');
+      const payload = encodeURIComponent(JSON.stringify({ access_code: accessCode, arena: monitorArena }));
+      document.cookie = `monitor_session=${payload}; path=/; max-age=86400; SameSite=Lax`;
+      document.cookie = `user_role=media; path=/; max-age=86400; SameSite=Lax`;
+      window.location.href = '/media';
     } catch {
-      setLoading(false);
-      router.push('/media');
+      window.location.href = '/media';
     }
   };
 
