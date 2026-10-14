@@ -4,19 +4,17 @@ import { useState, useRef, ChangeEvent, FormEvent } from 'react';
 import { useRouter } from 'next/navigation';
 import Link from 'next/link';
 import {
-  Lock, Shield, Star, Monitor,
-  Mail, Eye, EyeOff, Trophy, ArrowLeft, LogIn, Wifi, AlertCircle, X as XIcon, CheckCircle2
+  Lock, Shield, Star, Monitor, PlaySquare,
+  Mail, Eye, EyeOff, Trophy, ArrowLeft, LogIn, AlertCircle, X as XIcon
 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Badge } from '@/components/ui/badge';
-import { createClient } from '@/lib/supabase/client';
 
 export default function LoginPage() {
   const router = useRouter();
-  const supabase = createClient();
 
-  const [activeTab, setActiveTab] = useState<'admin' | 'juri' | 'monitor'>('admin');
+  const [activeTab, setActiveTab] = useState<'admin' | 'operator' | 'juri' | 'monitor'>('admin');
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -25,14 +23,21 @@ export default function LoginPage() {
   const [adminPassword, setAdminPassword] = useState('PoomsaePro#2025');
   const [showPassword, setShowPassword] = useState(false);
 
+  // Operator state
+  const [operatorUsername, setOperatorUsername] = useState('operator_a');
+  const [operatorPin, setOperatorPin] = useState('op1234');
+  const [operatorArena, setOperatorArena] = useState<'A' | 'B' | 'C'>('A');
+
   // Juri state
   const [juriCode, setJuriCode] = useState('J-2025-003');
   const [juriPins, setJuriPins] = useState(['3', '6', '4', '7', '5', '8']);
-  const [juriArena, setJuriArena] = useState('Arena 1 (A)');
+  const [juriArena, setJuriArena] = useState<'A' | 'B' | 'C'>('A');
+  const [juriPosition, setJuriPosition] = useState<string>('J3');
   const pinRefs = useRef<(HTMLInputElement | null)[]>([]);
 
-  // Monitor state
+  // Monitor / Media state
   const [accessCode, setAccessCode] = useState('KEJNAS2025');
+  const [monitorArena, setMonitorArena] = useState<'A' | 'B' | 'C'>('A');
 
   // Admin login submit
   const handleAdminSubmit = async (e: FormEvent) => {
@@ -42,12 +47,29 @@ export default function LoginPage() {
 
     try {
       document.cookie = `admin_session=true; path=/; max-age=86400`;
+      document.cookie = `user_role=admin; path=/; max-age=86400`;
       setLoading(false);
       router.push('/admin');
     } catch {
-      document.cookie = `admin_session=true; path=/; max-age=86400`;
       setLoading(false);
       router.push('/admin');
+    }
+  };
+
+  // Operator login submit
+  const handleOperatorSubmit = async (e: FormEvent) => {
+    e.preventDefault();
+    setLoading(true);
+    setError(null);
+
+    try {
+      document.cookie = `operator_session=${JSON.stringify({ username: operatorUsername, arena: operatorArena })}; path=/; max-age=86400`;
+      document.cookie = `user_role=operator; path=/; max-age=86400`;
+      setLoading(false);
+      router.push('/operator');
+    } catch {
+      setLoading(false);
+      router.push('/operator');
     }
   };
 
@@ -59,30 +81,30 @@ export default function LoginPage() {
 
     try {
       const pinStr = juriPins.join('');
-      document.cookie = `judge_session=${JSON.stringify({ judge_code: juriCode, pin: pinStr, arena: juriArena })}; path=/; max-age=86400`;
+      document.cookie = `judge_session=${JSON.stringify({ judge_code: juriCode, pin: pinStr, arena: juriArena, position: juriPosition })}; path=/; max-age=86400`;
+      document.cookie = `user_role=juri; path=/; max-age=86400`;
       setLoading(false);
       router.push('/juri');
     } catch {
-      document.cookie = `judge_session=active; path=/; max-age=86400`;
       setLoading(false);
       router.push('/juri');
     }
   };
 
-  // Monitor login submit
+  // Monitor / Media login submit
   const handleMonitorSubmit = async (e: FormEvent) => {
     e.preventDefault();
     setLoading(true);
     setError(null);
 
     try {
-      document.cookie = `monitor_session=${JSON.stringify({ access_code: accessCode })}; path=/; max-age=86400`;
+      document.cookie = `monitor_session=${JSON.stringify({ access_code: accessCode, arena: monitorArena })}; path=/; max-age=86400`;
+      document.cookie = `user_role=media; path=/; max-age=86400`;
       setLoading(false);
-      router.push('/monitor');
+      router.push('/media');
     } catch {
-      document.cookie = `monitor_session=active; path=/; max-age=86400`;
       setLoading(false);
-      router.push('/monitor');
+      router.push('/media');
     }
   };
 
@@ -121,7 +143,7 @@ export default function LoginPage() {
 
             <div className="space-y-2">
               <Badge variant="outline" className="border-white/30 text-white bg-white/10 text-xs px-3 py-1 font-bold">
-                ✓ V2.4 OFFICIAL PSS
+                ✓ V2.4 OFFICIAL PSS • REAL-TIME SYNC
               </Badge>
               <h2 className="text-3xl lg:text-4xl font-black leading-tight pt-2">
                 Gerakan Presisi, Penjurian Transparan
@@ -145,55 +167,66 @@ export default function LoginPage() {
         </div>
 
         {/* Right Side: Form Panel */}
-        <div className="md:w-7/12 p-8 lg:p-12 flex flex-col justify-between">
+        <div className="md:w-7/12 p-6 lg:p-10 flex flex-col justify-between">
           <div>
-            <div className="flex items-center justify-between mb-6">
+            <div className="flex items-center justify-between mb-4">
               <div>
                 <span className="text-xs font-bold text-[#C8102E] uppercase tracking-wider flex items-center gap-1.5">
                   <Lock className="w-3.5 h-3.5" /> SISTEM TERPADU SATU PINTU
                 </span>
                 <h1 className="text-2xl font-black text-gray-900 mt-1">Portal Masuk Petugas & Peserta</h1>
-                <p className="text-xs text-gray-500 mt-1">Pilih peran Anda untuk mengakses sistem penjurian & pemantauan.</p>
+                <p className="text-xs text-gray-500 mt-1">Pilih peran Anda untuk mengakses stasiun penjurian & pemantauan.</p>
               </div>
               <span className="flex items-center gap-1.5 text-xs text-emerald-600 bg-emerald-50 border border-emerald-200 px-3 py-1 rounded-full font-bold">
                 <span className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse"></span>
-                SERVER: ONLINE
+                ONLINE
               </span>
             </div>
 
-            {/* 3 Role Tabs */}
-            <div className="grid grid-cols-3 gap-2 mb-6 bg-gray-100 p-1.5 rounded-2xl">
+            {/* 4 Role Tabs: Admin, Operator, Juri, Monitor */}
+            <div className="grid grid-cols-4 gap-1.5 mb-6 bg-gray-100 p-1.5 rounded-2xl">
               <button
                 type="button"
                 onClick={() => { setActiveTab('admin'); setError(null); }}
-                className={`py-3 px-2 rounded-xl text-xs font-bold flex items-center justify-center gap-2 transition-all cursor-pointer ${
+                className={`py-2.5 px-1.5 rounded-xl text-xs font-bold flex flex-col sm:flex-row items-center justify-center gap-1.5 transition-all cursor-pointer ${
                   activeTab === 'admin' ? 'bg-[#C8102E] text-white shadow-md' : 'text-gray-600 hover:text-gray-900'
                 }`}
               >
-                <Shield className="w-4 h-4" />
-                <span>Admin Kejuaraan</span>
+                <Shield className="w-3.5 h-3.5" />
+                <span>Admin</span>
+              </button>
+
+              <button
+                type="button"
+                onClick={() => { setActiveTab('operator'); setError(null); }}
+                className={`py-2.5 px-1.5 rounded-xl text-xs font-bold flex flex-col sm:flex-row items-center justify-center gap-1.5 transition-all cursor-pointer ${
+                  activeTab === 'operator' ? 'bg-[#C8102E] text-white shadow-md' : 'text-gray-600 hover:text-gray-900'
+                }`}
+              >
+                <PlaySquare className="w-3.5 h-3.5" />
+                <span>Operator</span>
               </button>
 
               <button
                 type="button"
                 onClick={() => { setActiveTab('juri'); setError(null); }}
-                className={`py-3 px-2 rounded-xl text-xs font-bold flex items-center justify-center gap-2 transition-all cursor-pointer ${
+                className={`py-2.5 px-1.5 rounded-xl text-xs font-bold flex flex-col sm:flex-row items-center justify-center gap-1.5 transition-all cursor-pointer ${
                   activeTab === 'juri' ? 'bg-[#C8102E] text-white shadow-md' : 'text-gray-600 hover:text-gray-900'
                 }`}
               >
-                <Star className="w-4 h-4" />
-                <span>Juri Lapangan</span>
+                <Star className="w-3.5 h-3.5" />
+                <span>Juri</span>
               </button>
 
               <button
                 type="button"
                 onClick={() => { setActiveTab('monitor'); setError(null); }}
-                className={`py-3 px-2 rounded-xl text-xs font-bold flex items-center justify-center gap-2 transition-all cursor-pointer ${
+                className={`py-2.5 px-1.5 rounded-xl text-xs font-bold flex flex-col sm:flex-row items-center justify-center gap-1.5 transition-all cursor-pointer ${
                   activeTab === 'monitor' ? 'bg-[#C8102E] text-white shadow-md' : 'text-gray-600 hover:text-gray-900'
                 }`}
               >
-                <Monitor className="w-4 h-4" />
-                <span>Monitor / Penonton</span>
+                <Monitor className="w-3.5 h-3.5" />
+                <span>Media</span>
               </button>
             </div>
 
@@ -211,7 +244,7 @@ export default function LoginPage() {
             {activeTab === 'admin' && (
               <form onSubmit={handleAdminSubmit} className="space-y-4">
                 <div>
-                  <label className="block text-xs font-bold text-gray-700 mb-1">Alamat Email Resmi</label>
+                  <label className="block text-xs font-bold text-gray-700 mb-1">Alamat Email Resmi Admin</label>
                   <Input
                     type="email"
                     required
@@ -246,33 +279,96 @@ export default function LoginPage() {
                 <div className="flex items-center justify-between text-xs pt-1">
                   <label className="flex items-center gap-2 cursor-pointer text-gray-600 font-semibold">
                     <input type="checkbox" defaultChecked className="rounded text-[#C8102E] focus:ring-[#C8102E]" />
-                    <span>Ingat saya di workstation ini</span>
+                    <span>Ingat saya di stasiun ini</span>
                   </label>
-                  <a href="#" className="text-[#C8102E] hover:underline font-bold">Lupa kata sandi?</a>
+                  <span className="text-[#C8102E] font-bold">PBTI Super Admin</span>
                 </div>
 
-                <Button type="submit" loading={loading} className="w-full h-12 text-sm font-bold bg-[#C8102E] hover:bg-[#9B0C23] shadow-md cursor-pointer">
+                <Button type="submit" loading={loading} className="w-full h-11 text-xs font-bold bg-[#C8102E] hover:bg-[#9B0C23] shadow-md cursor-pointer">
                   <LogIn className="w-4 h-4 mr-1" /> Masuk sebagai Admin Kejuaraan
                 </Button>
               </form>
             )}
 
-            {/* TAB 2: JURI LAPANGAN FORM */}
-            {activeTab === 'juri' && (
-              <form onSubmit={handleJuriSubmit} className="space-y-4">
+            {/* TAB 2: OPERATOR FORM */}
+            {activeTab === 'operator' && (
+              <form onSubmit={handleOperatorSubmit} className="space-y-4">
                 <div>
-                  <label className="block text-xs font-bold text-gray-700 mb-1">Kode Juri</label>
+                  <label className="block text-xs font-bold text-gray-700 mb-1">Username Operator Lapangan</label>
                   <Input
+                    type="text"
                     required
-                    icon={<Star className="w-4 h-4" />}
-                    value={juriCode}
-                    onChange={(e) => setJuriCode(e.target.value)}
-                    placeholder="J-2025-003"
+                    icon={<PlaySquare className="w-4 h-4" />}
+                    value={operatorUsername}
+                    onChange={(e) => setOperatorUsername(e.target.value)}
+                    placeholder="operator_a"
                   />
                 </div>
 
                 <div>
-                  <label className="block text-xs font-bold text-gray-700 mb-1">PIN 6 Digit (Kotak Terpisah)</label>
+                  <label className="block text-xs font-bold text-gray-700 mb-1">PIN Akses Operator</label>
+                  <Input
+                    type="password"
+                    required
+                    icon={<Lock className="w-4 h-4" />}
+                    value={operatorPin}
+                    onChange={(e) => setOperatorPin(e.target.value)}
+                    placeholder="••••"
+                  />
+                </div>
+
+                <div>
+                  <label className="block text-xs font-bold text-gray-700 mb-1">Pilih Lapangan Operasi</label>
+                  <select
+                    className="w-full h-11 rounded-lg border border-gray-200 px-3 bg-white text-xs font-semibold focus:ring-2 focus:ring-[#C8102E]"
+                    value={operatorArena}
+                    onChange={(e) => setOperatorArena(e.target.value as 'A' | 'B' | 'C')}
+                  >
+                    <option value="A">Lapangan A (Tatami Utama)</option>
+                    <option value="B">Lapangan B</option>
+                    <option value="C">Lapangan C (Speed Kicking)</option>
+                  </select>
+                </div>
+
+                <Button type="submit" loading={loading} className="w-full h-11 text-xs font-bold bg-[#C8102E] hover:bg-[#9B0C23] shadow-md cursor-pointer">
+                  <LogIn className="w-4 h-4 mr-1" /> Masuk ke Konsol Operator
+                </Button>
+              </form>
+            )}
+
+            {/* TAB 3: JURI LAPANGAN FORM */}
+            {activeTab === 'juri' && (
+              <form onSubmit={handleJuriSubmit} className="space-y-4">
+                <div className="grid grid-cols-2 gap-3">
+                  <div>
+                    <label className="block text-xs font-bold text-gray-700 mb-1">Kode Juri</label>
+                    <Input
+                      required
+                      icon={<Star className="w-4 h-4" />}
+                      value={juriCode}
+                      onChange={(e) => setJuriCode(e.target.value)}
+                      placeholder="J-2025-003"
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-xs font-bold text-gray-700 mb-1">Posisi Meja Juri</label>
+                    <select
+                      className="w-full h-10 rounded-lg border border-gray-200 px-3 bg-white text-xs font-semibold focus:ring-2 focus:ring-[#C8102E]"
+                      value={juriPosition}
+                      onChange={(e) => setJuriPosition(e.target.value)}
+                    >
+                      <option value="J1">Juri 1 (J1)</option>
+                      <option value="J2">Juri 2 (J2)</option>
+                      <option value="J3">Juri 3 (J3)</option>
+                      <option value="J4">Juri 4 (J4)</option>
+                      <option value="J5">Juri 5 (J5)</option>
+                      <option value="cadangan">Juri Cadangan</option>
+                    </select>
+                  </div>
+                </div>
+
+                <div>
+                  <label className="block text-xs font-bold text-gray-700 mb-1">PIN 6 Digit Juri</label>
                   <div className="flex gap-2 justify-between">
                     {juriPins.map((val, idx) => (
                       <input
@@ -283,36 +379,36 @@ export default function LoginPage() {
                         value={val}
                         onChange={(e: ChangeEvent<HTMLInputElement>) => handlePinChange(idx, e.target.value)}
                         onKeyDown={(e) => handlePinKeyDown(idx, e)}
-                        className="w-12 h-12 text-center text-lg font-black border-2 border-gray-200 rounded-xl focus:border-[#C8102E] focus:outline-none bg-gray-50 focus:bg-white"
+                        className="w-10 h-10 text-center text-base font-black border-2 border-gray-200 rounded-xl focus:border-[#C8102E] focus:outline-none bg-gray-50 focus:bg-white"
                       />
                     ))}
                   </div>
                 </div>
 
                 <div>
-                  <label className="block text-xs font-bold text-gray-700 mb-1">Pilih Arena / Lapangan</label>
+                  <label className="block text-xs font-bold text-gray-700 mb-1">Pilih Arena Lapangan Penugasan</label>
                   <select
-                    className="w-full h-12 rounded-lg border border-gray-200 px-3 bg-white text-sm font-semibold focus:ring-2 focus:ring-[#C8102E]"
+                    className="w-full h-10 rounded-lg border border-gray-200 px-3 bg-white text-xs font-semibold focus:ring-2 focus:ring-[#C8102E]"
                     value={juriArena}
-                    onChange={(e) => setJuriArena(e.target.value)}
+                    onChange={(e) => setJuriArena(e.target.value as 'A' | 'B' | 'C')}
                   >
-                    <option value="Arena 1 (A)">Arena 1 (Lapangan A)</option>
-                    <option value="Arena 2 (B)">Arena 2 (Lapangan B)</option>
-                    <option value="Arena 3 (C)">Arena 3 (Lapangan C)</option>
+                    <option value="A">Arena 1 (Lapangan A)</option>
+                    <option value="B">Arena 2 (Lapangan B)</option>
+                    <option value="C">Arena 3 (Lapangan C)</option>
                   </select>
                 </div>
 
-                <Button type="submit" loading={loading} className="w-full h-12 text-sm font-bold bg-[#C8102E] hover:bg-[#9B0C23] shadow-md cursor-pointer">
+                <Button type="submit" loading={loading} className="w-full h-11 text-xs font-bold bg-[#C8102E] hover:bg-[#9B0C23] shadow-md cursor-pointer">
                   <LogIn className="w-4 h-4 mr-1" /> Masuk sebagai Juri Lapangan
                 </Button>
               </form>
             )}
 
-            {/* TAB 3: MONITOR / PENONTON FORM */}
+            {/* TAB 4: MEDIA / PROYEKTOR / MONITOR FORM */}
             {activeTab === 'monitor' && (
               <form onSubmit={handleMonitorSubmit} className="space-y-4">
                 <div>
-                  <label className="block text-xs font-bold text-gray-700 mb-1">Kode Akses Event (Tanpa Akun)</label>
+                  <label className="block text-xs font-bold text-gray-700 mb-1">Kode Akses Layar Media / Event</label>
                   <Input
                     required
                     icon={<Monitor className="w-4 h-4" />}
@@ -320,19 +416,46 @@ export default function LoginPage() {
                     onChange={(e) => setAccessCode(e.target.value)}
                     placeholder="KEJNAS2025"
                   />
-                  <p className="text-[11px] text-gray-500 mt-1">Otomatis masuk mode penonton / official (Read-Only).</p>
+                  <p className="text-[11px] text-gray-500 mt-1">Mode layar besar untuk proyektor arena atau monitor publik.</p>
                 </div>
 
-                <Button type="submit" loading={loading} className="w-full h-12 text-sm font-bold bg-[#C8102E] hover:bg-[#9B0C23] shadow-md cursor-pointer">
-                  <LogIn className="w-4 h-4 mr-1" /> Buka Mode Monitor (Read-Only)
-                </Button>
+                <div>
+                  <label className="block text-xs font-bold text-gray-700 mb-1">Pilih Arena Tampilan Proyektor</label>
+                  <select
+                    className="w-full h-11 rounded-lg border border-gray-200 px-3 bg-white text-xs font-semibold focus:ring-2 focus:ring-[#C8102E]"
+                    value={monitorArena}
+                    onChange={(e) => setMonitorArena(e.target.value as 'A' | 'B' | 'C')}
+                  >
+                    <option value="A">Layar Proyektor Lapangan A</option>
+                    <option value="B">Layar Proyektor Lapangan B</option>
+                    <option value="C">Layar Proyektor Lapangan C</option>
+                  </select>
+                </div>
+
+                <div className="grid grid-cols-2 gap-2 pt-2">
+                  <Button 
+                    type="submit" 
+                    loading={loading} 
+                    className="h-11 text-xs font-bold bg-[#C8102E] hover:bg-[#9B0C23] shadow-md cursor-pointer"
+                  >
+                    <Monitor className="w-4 h-4 mr-1" /> Buka Layar Proyektor
+                  </Button>
+                  <Button 
+                    type="button"
+                    variant="outline"
+                    onClick={() => router.push('/monitor')}
+                    className="h-11 text-xs font-bold border-gray-300 hover:bg-gray-50"
+                  >
+                    Buka Klasemen Publik
+                  </Button>
+                </div>
               </form>
             )}
           </div>
 
           <div className="pt-6 border-t border-gray-100 flex items-center justify-between text-xs text-gray-500">
             <Link href="/" className="inline-flex items-center gap-1 font-bold text-gray-700 hover:text-[#C8102E]">
-              <ArrowLeft className="w-3.5 h-3.5" /> Kembali ke Halaman Beranda
+              <ArrowLeft className="w-3.5 h-3.5" /> Beranda
             </Link>
             <div className="flex gap-3 items-center">
               <span>Panduan Juri</span>

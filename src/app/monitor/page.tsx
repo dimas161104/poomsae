@@ -3,40 +3,62 @@
 import React, { useState, useEffect } from 'react';
 import { 
   Trophy, BarChart3, Monitor, FileText, Maximize2, Download, 
-  Wifi, Radio, CheckCircle, Award, ArrowUp, ArrowDown, Eye, 
-  RefreshCw, QrCode, Filter, Calendar 
+  Wifi, Radio, CheckCircle, Award, Eye, RefreshCw, Filter, Calendar 
 } from 'lucide-react';
-import { createClient } from '@/lib/supabase/client';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { Tabs, TabsList, TabsTrigger, TabsContent } from '@/components/ui/tabs';
-import { Avatar, AvatarFallback, AvatarImage } from '@/components/ui/avatar';
-import { Select, SelectTrigger, SelectContent, SelectItem, SelectValue } from '@/components/ui/select';
 import { PublicNavbar, PublicFooter } from '@/components/shared/public-layout';
+import { dbService } from '@/lib/db-service';
+import { Match, TournamentSettings } from '@/types/database';
+import { calculateFormScore } from '@/lib/bracket-logic';
+import { RecapModal } from '@/components/shared/recap-modal';
+import { printRecapSheet } from '@/lib/export-utils';
 
 export default function MonitorPage() {
   const [isFullscreen, setIsFullscreen] = useState(false);
+  const [selectedArena, setSelectedArena] = useState<'A' | 'B' | 'C'>('A');
+  const [isRecapOpen, setIsRecapOpen] = useState(false);
+
+  const [settings, setSettings] = useState<TournamentSettings>(dbService.getSettings());
+  const [matches, setMatches] = useState<Match[]>(dbService.getMatches());
+
+  // Subscribe to real-time updates
+  useEffect(() => {
+    const handleSync = () => {
+      setSettings(dbService.getSettings());
+      setMatches(dbService.getMatches());
+    };
+
+    handleSync();
+    const unsub = dbService.subscribe(handleSync);
+    return () => unsub();
+  }, []);
 
   const toggleFullscreen = () => {
     if (!document.fullscreenElement) {
-      document.documentElement.requestFullscreen().catch(err => {
-        console.error(`Error attempting to enable fullscreen: ${err.message}`);
-      });
+      document.documentElement.requestFullscreen().catch(() => {});
+      setIsFullscreen(true);
     } else {
       if (document.exitFullscreen) {
-        document.exitFullscreen();
+        document.exitFullscreen().catch(() => {});
+        setIsFullscreen(false);
       }
     }
   };
 
-  useEffect(() => {
-    const handleFullscreenChange = () => {
-      setIsFullscreen(!!document.fullscreenElement);
-    };
-    document.addEventListener('fullscreenchange', handleFullscreenChange);
-    return () => document.removeEventListener('fullscreenchange', handleFullscreenChange);
-  }, []);
+  const currentMatch = matches.find(m => m.arena_code === selectedArena && m.is_current) ||
+                       matches.find(m => m.arena_code === selectedArena);
+
+  const arenaMatches = matches.filter(m => m.arena_code === selectedArena);
+  const completedMatches = [...arenaMatches]
+    .filter(m => (m.final_score ?? 0) > 0)
+    .sort((a, b) => (b.final_score ?? 0) - (a.final_score ?? 0));
+
+  const form1Result = calculateFormScore(currentMatch?.scores?.form1_scores || {}, settings);
+  const judgesCount = settings.judges_per_session || 3;
+  const positions = Array.from({ length: judgesCount }, (_, i) => `J${i + 1}`);
 
   return (
     <div className="min-h-screen bg-gray-50 flex flex-col font-sans">
@@ -44,19 +66,19 @@ export default function MonitorPage() {
 
       <main className="flex-grow flex flex-col">
         {/* TOP STATUS BAR */}
-        <div className="bg-gradient-to-r from-red-950 via-red-900 to-red-950 text-white p-3 flex flex-wrap items-center justify-between text-sm shadow-md z-10">
+        <div className="bg-gradient-to-r from-red-950 via-red-900 to-red-950 text-white p-3 flex flex-wrap items-center justify-between text-xs shadow-md z-10">
           <div className="flex items-center space-x-3">
             <Badge variant="destructive" className="animate-pulse bg-red-600 text-white px-3 py-1 flex items-center space-x-2">
-              <Radio className="w-4 h-4 mr-1" /> LIVE BROADCAST FEED
+              <Radio className="w-3.5 h-3.5 mr-1" /> LIVE BROADCAST FEED
             </Badge>
           </div>
           <div className="flex items-center space-x-2 text-red-100 font-medium">
-            <Wifi className="w-4 h-4 text-green-400" />
-            <span>• Terhubung ke PSS Server Arena 1 (Latency 18ms)</span>
+            <Wifi className="w-3.5 h-3.5 text-emerald-400" />
+            <span>• Terhubung ke Server PSS (Real-time Sync Active)</span>
           </div>
           <div className="flex items-center space-x-3">
-            <Badge className="bg-gray-800 text-gray-200 border border-gray-600 px-3 py-1 flex items-center">
-              <Eye className="w-4 h-4 mr-2" /> MODE PENONTON • HANYA LIHAT (READ-ONLY)
+            <Badge className="bg-gray-800 text-gray-200 border border-gray-600 px-3 py-1 flex items-center text-[10px]">
+              <Eye className="w-3.5 h-3.5 mr-1.5" /> MODE MONITOR (READ-ONLY)
             </Badge>
           </div>
         </div>
@@ -65,479 +87,203 @@ export default function MonitorPage() {
         <div className="flex-grow p-4 md:p-6 lg:p-8 max-w-[1600px] mx-auto w-full space-y-6">
           <Tabs defaultValue="lcd" className="w-full">
             <div className="flex flex-col lg:flex-row lg:items-center justify-between mb-6 space-y-4 lg:space-y-0">
-              <TabsList className="bg-white border shadow-sm p-1">
-                <TabsTrigger value="klasemen" className="data-[state=active]:bg-red-50 data-[state=active]:text-red-700 data-[state=active]:font-bold px-4 py-2">
-                  <BarChart3 className="w-4 h-4 mr-2" />
+              <TabsList className="bg-white border shadow-xs p-1">
+                <TabsTrigger value="klasemen" className="data-[state=active]:bg-red-50 data-[state=active]:text-red-700 data-[state=active]:font-bold px-4 py-2 text-xs">
+                  <BarChart3 className="w-4 h-4 mr-1.5" />
                   Papan Klasemen Real-Time
                 </TabsTrigger>
-                <TabsTrigger value="lcd" className="data-[state=active]:bg-red-600 data-[state=active]:text-white data-[state=active]:font-bold px-4 py-2">
-                  <Monitor className="w-4 h-4 mr-2" />
-                  Layar LCD Proyektor PSS Arena
-                </TabsTrigger>
-                <TabsTrigger value="pdf" className="data-[state=active]:bg-red-50 data-[state=active]:text-red-700 data-[state=active]:font-bold px-4 py-2">
-                  <FileText className="w-4 h-4 mr-2" />
-                  Rekapitulasi Nilai Resmi PDF
+                <TabsTrigger value="lcd" className="data-[state=active]:bg-red-600 data-[state=active]:text-white data-[state=active]:font-bold px-4 py-2 text-xs">
+                  <Monitor className="w-4 h-4 mr-1.5" />
+                  Layar LCD Proyektor PSS
                 </TabsTrigger>
               </TabsList>
 
-              <div className="flex items-center space-x-3">
-                <Select defaultValue="arena1">
-                  <SelectTrigger className="w-[180px] bg-white">
-                    <SelectValue placeholder="Pilih Arena" />
-                  </SelectTrigger>
-                  <SelectContent>
-                    <SelectItem value="arena1">Arena 1</SelectItem>
-                    <SelectItem value="arena2">Arena 2</SelectItem>
-                    <SelectItem value="arena3">Arena 3</SelectItem>
-                  </SelectContent>
-                </Select>
-                <Button variant="outline" className="bg-white" onClick={toggleFullscreen}>
-                  <Maximize2 className="w-4 h-4 mr-2" />
-                  Layar Penuh (F11)
+              <div className="flex items-center space-x-2">
+                <div className="flex bg-white border rounded-lg p-0.5 shadow-xs">
+                  {(['A', 'B', 'C'] as const).map(code => (
+                    <button
+                      key={code}
+                      onClick={() => setSelectedArena(code)}
+                      className={`px-3 py-1.5 rounded-md text-xs font-bold transition-all ${
+                        selectedArena === code ? 'bg-[#C8102E] text-white' : 'text-gray-600 hover:text-gray-900'
+                      }`}
+                    >
+                      Lapangan {code}
+                    </button>
+                  ))}
+                </div>
+
+                <Button variant="outline" size="sm" className="bg-white text-xs" onClick={toggleFullscreen}>
+                  <Maximize2 className="w-3.5 h-3.5 mr-1" />
+                  Layar Penuh
                 </Button>
-                <Button variant="default" className="bg-red-700 hover:bg-red-800 text-white">
-                  <Download className="w-4 h-4 mr-2" />
-                  Unduh PDF
+
+                <Button 
+                  variant="default" 
+                  size="sm" 
+                  onClick={() => setIsRecapOpen(true)}
+                  className="bg-red-700 hover:bg-red-800 text-white text-xs font-bold"
+                >
+                  <FileText className="w-3.5 h-3.5 mr-1" />
+                  Rekap & Cetak Skor
                 </Button>
               </div>
             </div>
 
-            {/* TAB 1 - KLASEMEN REAL-TIME */}
+            {/* TAB 1: KLASEMEN */}
             <TabsContent value="klasemen" className="space-y-4">
-              <Card className="border-t-4 border-t-red-600 shadow-lg">
-                <CardHeader className="bg-gray-50 border-b flex flex-row items-center justify-between">
+              <Card className="shadow-sm border border-gray-200">
+                <CardHeader className="bg-gray-800 text-white pb-4 flex flex-row items-center justify-between">
                   <div>
-                    <CardTitle className="text-xl font-bold text-gray-800">Papan Klasemen Real-Time</CardTitle>
-                    <p className="text-sm text-gray-500 mt-1">Kategori Senior Individual Putra • Babak Final</p>
+                    <CardTitle className="text-base font-bold flex items-center gap-2">
+                      <Trophy className="w-5 h-5 text-yellow-400" />
+                      Klasemen Resmi: Lapangan {selectedArena}
+                    </CardTitle>
+                    <p className="text-xs text-gray-400 mt-1">{settings.name}</p>
                   </div>
-                  <Badge variant="outline" className="bg-green-50 text-green-700 border-green-200 flex items-center py-1.5 px-3">
-                    <RefreshCw className="w-3.5 h-3.5 mr-2 animate-spin-slow" />
-                    AUTO-REFRESH SETIAP 10 DETIK
+                  <Badge variant="outline" className="bg-gray-700 text-gray-200 border-gray-600 text-xs">
+                    REALTIME SYNC
                   </Badge>
                 </CardHeader>
-                <CardContent className="p-0">
-                  <div className="overflow-x-auto">
-                    <table className="w-full text-sm text-left">
-                      <thead className="bg-gray-100 text-gray-700 font-semibold uppercase text-xs">
+                <div className="overflow-x-auto">
+                  {completedMatches.length === 0 ? (
+                    <div className="p-12 text-center text-xs text-gray-400">
+                      Belum ada partai selesai di Lapangan {selectedArena}.
+                    </div>
+                  ) : (
+                    <table className="w-full text-xs text-left">
+                      <thead className="bg-gray-100 text-gray-700 font-bold uppercase text-[10px]">
                         <tr>
-                          <th className="px-6 py-4">Peringkat</th>
-                          <th className="px-6 py-4">Nama Atlet</th>
-                          <th className="px-6 py-4">Poomsae</th>
-                          <th className="px-6 py-4">Kontingen</th>
-                          <th className="px-6 py-4 text-center">Rata-rata Akurasi</th>
-                          <th className="px-6 py-4 text-center">Rata-rata Presentasi</th>
-                          <th className="px-6 py-4 text-center">Total Poin Resmi</th>
-                          <th className="px-6 py-4">Status</th>
+                          <th className="px-4 py-3">Peringkat</th>
+                          <th className="px-4 py-3">Partai</th>
+                          <th className="px-4 py-3">Nama Atlet</th>
+                          <th className="px-4 py-3">Kontingen</th>
+                          <th className="px-4 py-3">Kategori</th>
+                          <th className="px-4 py-3 text-center">Skor Form 1</th>
+                          <th className="px-4 py-3 text-center">Skor Form 2</th>
+                          <th className="px-4 py-3 text-center">Total Nilai</th>
+                          <th className="px-4 py-3 text-center">Medali</th>
                         </tr>
                       </thead>
-                      <tbody className="divide-y divide-gray-200">
-                        <tr className="bg-yellow-50 hover:bg-yellow-100 transition-colors">
-                          <td className="px-6 py-4 font-bold text-lg text-yellow-600">#1</td>
-                          <td className="px-6 py-4 font-bold">Ahmad Zaki Kurniawan</td>
-                          <td className="px-6 py-4 text-gray-600">Taegeuk 8 Jang & Koryo</td>
-                          <td className="px-6 py-4 font-medium">DKI Jakarta</td>
-                          <td className="px-6 py-4 text-center font-mono">3.700</td>
-                          <td className="px-6 py-4 text-center font-mono">4.783</td>
-                          <td className="px-6 py-4 text-center font-bold text-lg font-mono text-blue-700">8.483</td>
-                          <td className="px-6 py-4"><Badge className="bg-yellow-500 hover:bg-yellow-600 text-white">EMAS SEMENTARA</Badge></td>
-                        </tr>
-                        <tr className="bg-gray-50 hover:bg-gray-100 transition-colors">
-                          <td className="px-6 py-4 font-bold text-lg text-gray-500">#2</td>
-                          <td className="px-6 py-4 font-bold">Rayhan Bagus Pratama</td>
-                          <td className="px-6 py-4 text-gray-600">Taegeuk 8 Jang & Koryo</td>
-                          <td className="px-6 py-4 font-medium">Jawa Barat</td>
-                          <td className="px-6 py-4 text-center font-mono">3.650</td>
-                          <td className="px-6 py-4 text-center font-mono">4.700</td>
-                          <td className="px-6 py-4 text-center font-bold text-lg font-mono text-gray-700">8.350</td>
-                          <td className="px-6 py-4"><Badge className="bg-gray-400 hover:bg-gray-500 text-white">PERAK SEMENTARA</Badge></td>
-                        </tr>
-                        <tr className="bg-orange-50 hover:bg-orange-100 transition-colors">
-                          <td className="px-6 py-4 font-bold text-lg text-orange-600">#3</td>
-                          <td className="px-6 py-4 font-bold">Muhammad Dimas Satria</td>
-                          <td className="px-6 py-4 text-gray-600">Taegeuk 8 Jang & Koryo</td>
-                          <td className="px-6 py-4 font-medium">Jawa Tengah</td>
-                          <td className="px-6 py-4 text-center font-mono">3.617</td>
-                          <td className="px-6 py-4 text-center font-mono">4.666</td>
-                          <td className="px-6 py-4 text-center font-bold text-lg font-mono text-orange-700">8.283</td>
-                          <td className="px-6 py-4"><Badge className="bg-orange-600 hover:bg-orange-700 text-white">PERUNGGU SEMENTARA</Badge></td>
-                        </tr>
-                        {[4,5,6,7,8,9,10].map((rank) => (
-                          <tr key={rank} className="hover:bg-gray-50 transition-colors">
-                            <td className="px-6 py-4 font-semibold text-gray-600">#{rank}</td>
-                            <td className="px-6 py-4 font-medium text-gray-800">Atlet Contoh {rank}</td>
-                            <td className="px-6 py-4 text-gray-600">Taegeuk 8 Jang & Koryo</td>
-                            <td className="px-6 py-4 text-gray-600">Kontingen {rank}</td>
-                            <td className="px-6 py-4 text-center font-mono text-gray-600">{(3.5 - (rank*0.02)).toFixed(3)}</td>
-                            <td className="px-6 py-4 text-center font-mono text-gray-600">{(4.5 - (rank*0.02)).toFixed(3)}</td>
-                            <td className="px-6 py-4 text-center font-bold font-mono text-gray-700">{(8.0 - (rank*0.04)).toFixed(3)}</td>
-                            <td className="px-6 py-4"><Badge variant="outline" className="text-gray-500">PERINGKAT {rank}</Badge></td>
+                      <tbody className="divide-y divide-gray-100 bg-white">
+                        {completedMatches.map((m, idx) => (
+                          <tr key={m.id} className="hover:bg-gray-50">
+                            <td className="px-4 py-3 font-black text-sm">
+                              {idx === 0 && <span className="text-amber-500">🥇 #1</span>}
+                              {idx === 1 && <span className="text-slate-400">🥈 #2</span>}
+                              {idx === 2 && <span className="text-amber-700">🥉 #3</span>}
+                              {idx > 2 && `#${idx + 1}`}
+                            </td>
+                            <td className="px-4 py-3 font-bold">#{m.match_number}</td>
+                            <td className="px-4 py-3">
+                              <span className="font-bold text-gray-900">{m.athlete?.name}</span>
+                              {m.athlete?.athlete2_name && (
+                                <span className="text-rose-600 block font-normal">& {m.athlete.athlete2_name}</span>
+                              )}
+                            </td>
+                            <td className="px-4 py-3 text-gray-600">{m.athlete?.contingent} ({m.athlete?.province})</td>
+                            <td className="px-4 py-3 text-gray-700">{m.category_name}</td>
+                            <td className="px-4 py-3 text-center font-mono">{m.form1_final_score?.toFixed(3) || '-'}</td>
+                            <td className="px-4 py-3 text-center font-mono">{m.form2_final_score?.toFixed(3) || '-'}</td>
+                            <td className="px-4 py-3 text-center font-mono font-black text-sm text-[#C8102E]">
+                              {m.final_score?.toFixed(3) || '-'}
+                            </td>
+                            <td className="px-4 py-3 text-center">
+                              {idx === 0 && <Badge variant="default" className="bg-amber-400 text-amber-950 text-[10px]">EMAS</Badge>}
+                              {idx === 1 && <Badge variant="secondary" className="text-[10px]">PERAK</Badge>}
+                              {idx === 2 && <Badge variant="outline" className="text-amber-800 border-amber-700 text-[10px]">PERUNGGU</Badge>}
+                              {idx > 2 && '-'}
+                            </td>
                           </tr>
                         ))}
                       </tbody>
                     </table>
-                  </div>
-                </CardContent>
+                  )}
+                </div>
               </Card>
             </TabsContent>
 
-            {/* TAB 2 - LCD PROYEKTOR */}
+            {/* TAB 2: LCD DISPLAY */}
             <TabsContent value="lcd" className="space-y-6">
-              {/* LCD Header */}
-              <Card className="border-0 shadow-lg bg-gradient-to-r from-red-900 via-red-800 to-red-900 text-white overflow-hidden rounded-xl">
-                <div className="p-4 md:p-6 flex flex-col md:flex-row items-center justify-between gap-4">
-                  <div className="flex items-center gap-4">
-                    <div className="bg-red-600 text-white font-black text-2xl px-5 py-3 rounded-lg shadow-inner border border-red-500">
-                      ARENA 1
+              {currentMatch ? (
+                <>
+                  <div className="bg-[#2A2F3A] text-white p-6 rounded-3xl shadow-xl flex flex-wrap items-center justify-between gap-4 border-b-4 border-[#C8102E]">
+                    <div className="flex items-center gap-4">
+                      <div className="w-14 h-14 rounded-2xl bg-[#C8102E] flex items-center justify-center text-2xl font-black">
+                        {selectedArena}
+                      </div>
+                      <div>
+                        <Badge variant="default" className="bg-[#C8102E] text-[10px] uppercase font-bold mb-1">
+                          LAPANGAN {selectedArena} • PARTAI #{currentMatch.match_number}
+                        </Badge>
+                        <h2 className="text-xl md:text-2xl font-black">{currentMatch.athlete?.name}</h2>
+                        {currentMatch.athlete?.athlete2_name && (
+                          <p className="text-base font-bold text-rose-400">& {currentMatch.athlete.athlete2_name} (Pair)</p>
+                        )}
+                        <p className="text-xs text-gray-400">{currentMatch.athlete?.contingent} • {currentMatch.category_name}</p>
+                      </div>
                     </div>
-                    <div>
-                      <h2 className="text-2xl md:text-3xl font-black tracking-wide text-white uppercase drop-shadow-md">
-                        Kejuaraan Nasional Poomsae Indonesia 2025
-                      </h2>
-                      <p className="text-red-200 mt-1 flex items-center font-medium">
-                        GOR Among Rogo, D.I. Yogyakarta • Official WT Electronic Scoring Engine
-                      </p>
+
+                    <div className="text-right">
+                      <span className="text-[10px] text-gray-400 font-bold uppercase">NILAI AKHIR RESMI</span>
+                      <div className="text-5xl font-mono font-black text-[#E8384F]">
+                        {currentMatch.final_score !== null && currentMatch.final_score !== undefined
+                          ? currentMatch.final_score.toFixed(3)
+                          : (form1Result.averageScore > 0 ? form1Result.averageScore.toFixed(3) : '0.000')}
+                      </div>
                     </div>
                   </div>
-                  <div className="flex flex-col items-end">
-                    <span className="text-xs text-red-300 font-bold uppercase tracking-wider mb-1">STATUS PSS</span>
-                    <Badge className="bg-green-500 hover:bg-green-600 text-white border-0 px-4 py-1.5 flex items-center text-sm shadow-md">
-                      <CheckCircle className="w-4 h-4 mr-2" /> VERIFIED RESULT
-                    </Badge>
+
+                  {/* Judges Score Panels */}
+                  <div className={`grid grid-cols-1 sm:grid-cols-2 ${judgesCount === 5 ? 'md:grid-cols-5' : 'md:grid-cols-3'} gap-3`}>
+                    {positions.map(pos => {
+                      const detail = form1Result.details[pos];
+                      const scoreVal = detail ? detail.total_score : null;
+                      const isCutoff = detail?.is_highest || detail?.is_lowest;
+
+                      return (
+                        <div 
+                          key={pos}
+                          className={`p-4 rounded-2xl border text-center shadow-xs space-y-1.5 ${
+                            isCutoff ? 'bg-red-50 border-red-200' : 'bg-white border-gray-200'
+                          }`}
+                        >
+                          <div className="flex justify-between items-center text-xs">
+                            <span className="font-bold text-gray-700">{pos}</span>
+                            {detail?.is_highest && <Badge variant="destructive" className="text-[9px]">MAX (CUT-OFF)</Badge>}
+                            {detail?.is_lowest && <Badge variant="destructive" className="text-[9px]">MIN (CUT-OFF)</Badge>}
+                          </div>
+                          <div className={`text-3xl font-black font-mono ${isCutoff ? 'text-red-600 line-through' : 'text-gray-900'}`}>
+                            {scoreVal !== null ? scoreVal.toFixed(2) : '-.--'}
+                          </div>
+                          <div className="text-[10px] text-gray-500 pt-1 border-t flex justify-between">
+                            <span>Akurasi: {detail ? detail.accuracy.toFixed(2) : '-'}</span>
+                            <span>Pres: {detail ? detail.presentation_total.toFixed(2) : '-'}</span>
+                          </div>
+                        </div>
+                      );
+                    })}
                   </div>
+                </>
+              ) : (
+                <div className="p-12 text-center text-xs text-gray-400">
+                  Belum ada partai aktif di Lapangan {selectedArena}.
                 </div>
-              </Card>
-
-              {/* Athlete Profile & Final Score */}
-              <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
-                {/* Left: Athlete Info */}
-                <Card className="shadow-lg border-l-8 border-l-blue-600">
-                  <CardContent className="p-6 flex flex-col items-center text-center">
-                    <div className="w-full flex justify-between items-start mb-4">
-                      <Badge className="bg-blue-600 hover:bg-blue-700 text-white">SUDUT BIRU (CHUNG)</Badge>
-                      <Badge variant="outline" className="font-bold border-gray-300">DKI JAKARTA</Badge>
-                    </div>
-                    <Avatar className="w-32 h-32 border-4 border-gray-100 shadow-md mb-4">
-                      <AvatarImage src="/placeholder-avatar.jpg" />
-                      <AvatarFallback className="text-4xl bg-blue-50 text-blue-700 font-bold">AZ</AvatarFallback>
-                    </Avatar>
-                    <h3 className="text-3xl font-black text-gray-900 mb-1 uppercase tracking-tight">Ahmad Zaki Kurni</h3>
-                    <p className="text-gray-500 font-medium mb-3">Senior Individual Putra • Babak: Final</p>
-                    <div className="bg-red-50 px-4 py-2 rounded-md w-full border border-red-100">
-                      <p className="text-red-700 font-bold text-sm">Bentuk Gerakan: Taegeuk 8 Jang & Koryo</p>
-                    </div>
-                  </CardContent>
-                </Card>
-
-                {/* Center: Method Explanation */}
-                <Card className="shadow-lg bg-gray-50 border-gray-200">
-                  <CardContent className="p-6 h-full flex flex-col justify-center items-center text-center space-y-6">
-                    <div className="bg-green-100 p-3 rounded-full">
-                      <CheckCircle className="w-10 h-10 text-green-600" />
-                    </div>
-                    <div>
-                      <h4 className="text-lg font-bold text-gray-800 mb-3">METODE KALKULASI WT</h4>
-                      <p className="text-gray-600 text-sm leading-relaxed max-w-sm">
-                        Skor tertinggi (Juri 2) & terendah (Juri 4) dipotong otomatis (cut-off). Nilai akhir dihitung dari rata-rata 3 juri tengah.
-                      </p>
-                    </div>
-                  </CardContent>
-                </Card>
-
-                {/* Right: Final Score */}
-                <Card className="shadow-xl bg-gradient-to-br from-red-950 to-red-900 border-0 text-white relative overflow-hidden">
-                  <div className="absolute top-0 right-0 p-4 opacity-20">
-                    <Trophy className="w-32 h-32" />
-                  </div>
-                  <CardContent className="p-8 h-full flex flex-col justify-between relative z-10">
-                    <div className="flex justify-between items-start">
-                      <span className="text-red-200 font-bold uppercase tracking-wider text-sm">
-                        NILAI AKHIR RESMI<br/>(OFFICIAL FINAL SCORE)
-                      </span>
-                      <Badge className="bg-green-500 text-white border-0 shadow-md">
-                        SAH • TERKONFIRMASI
-                      </Badge>
-                    </div>
-                    <div className="text-center my-6">
-                      <span className="text-8xl md:text-9xl font-black tracking-tighter drop-shadow-lg text-white">
-                        8.483
-                      </span>
-                    </div>
-                    <div className="flex justify-center">
-                      <Badge className="bg-yellow-500 hover:bg-yellow-600 text-yellow-950 text-lg px-6 py-2 shadow-lg border-2 border-yellow-300 font-bold">
-                        <Award className="w-5 h-5 mr-2" /> PERINGKAT 1 (MEDALI EMAS SEMENTARA)
-                      </Badge>
-                    </div>
-                  </CardContent>
-                </Card>
-              </div>
-
-              {/* Judges Panel */}
-              <Card className="shadow-lg border-t-4 border-t-gray-800">
-                <CardHeader className="bg-gray-50 border-b pb-4">
-                  <div className="flex flex-col md:flex-row justify-between items-center gap-2">
-                    <CardTitle className="text-xl font-bold text-gray-800 uppercase tracking-tight flex items-center">
-                      <Monitor className="w-5 h-5 mr-3 text-red-600" />
-                      PANEL KEPUTUSAN JURI ELEKTRONIK (5 JUDGES WT PSS)
-                    </CardTitle>
-                    <Badge variant="outline" className="font-mono bg-white text-gray-700 px-3 py-1 border-gray-300">
-                      SKALA: AKURASI (4.00) + PRESENTASI (6.00) = 10.00
-                    </Badge>
-                  </div>
-                </CardHeader>
-                <CardContent className="p-6">
-                  <div className="grid grid-cols-1 md:grid-cols-5 gap-4">
-                    {/* Judge 1 */}
-                    <div className="bg-white border rounded-xl p-4 shadow-sm text-center flex flex-col items-center">
-                      <div className="w-full bg-gray-800 text-white font-bold py-1.5 rounded-t-lg text-sm mb-3">JURI 1</div>
-                      <Badge className="bg-blue-100 text-blue-800 border-blue-200 mb-4 text-xs font-semibold hover:bg-blue-200">TERHITUNG</Badge>
-                      <div className="text-4xl font-black text-gray-800 font-mono mb-4">8.45</div>
-                      <div className="w-full space-y-2 text-sm">
-                        <div className="flex justify-between border-b pb-1">
-                          <span className="text-gray-500">Akurasi</span>
-                          <span className="font-bold font-mono">3.70</span>
-                        </div>
-                        <div className="flex justify-between">
-                          <span className="text-gray-500">Presentasi</span>
-                          <span className="font-bold font-mono">4.75</span>
-                        </div>
-                      </div>
-                    </div>
-
-                    {/* Judge 2 (Cut-off High) */}
-                    <div className="bg-red-50 border border-red-200 rounded-xl p-4 shadow-sm text-center flex flex-col items-center opacity-80">
-                      <div className="w-full bg-gray-800 text-white font-bold py-1.5 rounded-t-lg text-sm mb-3">JURI 2</div>
-                      <Badge variant="destructive" className="mb-4 text-xs font-semibold">TERTINGGI / CUT-OFF</Badge>
-                      <div className="text-4xl font-black text-red-600 font-mono mb-4 line-through decoration-red-600 decoration-4">8.55</div>
-                      <div className="w-full space-y-2 text-sm opacity-70">
-                        <div className="flex justify-between border-b border-red-100 pb-1">
-                          <span className="text-gray-500">Akurasi</span>
-                          <span className="font-bold font-mono text-red-600 line-through">3.70</span>
-                        </div>
-                        <div className="flex justify-between">
-                          <span className="text-gray-500">Presentasi</span>
-                          <span className="font-bold font-mono text-red-600 line-through">4.85</span>
-                        </div>
-                      </div>
-                    </div>
-
-                    {/* Judge 3 */}
-                    <div className="bg-white border rounded-xl p-4 shadow-sm text-center flex flex-col items-center">
-                      <div className="w-full bg-gray-800 text-white font-bold py-1.5 rounded-t-lg text-sm mb-3">JURI 3</div>
-                      <Badge className="bg-blue-100 text-blue-800 border-blue-200 mb-4 text-xs font-semibold hover:bg-blue-200">TERHITUNG</Badge>
-                      <div className="text-4xl font-black text-gray-800 font-mono mb-4">8.50</div>
-                      <div className="w-full space-y-2 text-sm">
-                        <div className="flex justify-between border-b pb-1">
-                          <span className="text-gray-500">Akurasi</span>
-                          <span className="font-bold font-mono">3.70</span>
-                        </div>
-                        <div className="flex justify-between">
-                          <span className="text-gray-500">Presentasi</span>
-                          <span className="font-bold font-mono">4.80</span>
-                        </div>
-                      </div>
-                    </div>
-
-                    {/* Judge 4 (Cut-off Low) */}
-                    <div className="bg-red-50 border border-red-200 rounded-xl p-4 shadow-sm text-center flex flex-col items-center opacity-80">
-                      <div className="w-full bg-gray-800 text-white font-bold py-1.5 rounded-t-lg text-sm mb-3">JURI 4</div>
-                      <Badge variant="destructive" className="mb-4 text-xs font-semibold">TERENDAH / CUT-OFF</Badge>
-                      <div className="text-4xl font-black text-red-600 font-mono mb-4 line-through decoration-red-600 decoration-4">8.40</div>
-                      <div className="w-full space-y-2 text-sm opacity-70">
-                        <div className="flex justify-between border-b border-red-100 pb-1">
-                          <span className="text-gray-500">Akurasi</span>
-                          <span className="font-bold font-mono text-red-600 line-through">3.60</span>
-                        </div>
-                        <div className="flex justify-between">
-                          <span className="text-gray-500">Presentasi</span>
-                          <span className="font-bold font-mono text-red-600 line-through">4.80</span>
-                        </div>
-                      </div>
-                    </div>
-
-                    {/* Judge 5 */}
-                    <div className="bg-white border rounded-xl p-4 shadow-sm text-center flex flex-col items-center">
-                      <div className="w-full bg-gray-800 text-white font-bold py-1.5 rounded-t-lg text-sm mb-3">JURI 5</div>
-                      <Badge className="bg-blue-100 text-blue-800 border-blue-200 mb-4 text-xs font-semibold hover:bg-blue-200">TERHITUNG</Badge>
-                      <div className="text-4xl font-black text-gray-800 font-mono mb-4">8.50</div>
-                      <div className="w-full space-y-2 text-sm">
-                        <div className="flex justify-between border-b pb-1">
-                          <span className="text-gray-500">Akurasi</span>
-                          <span className="font-bold font-mono">3.70</span>
-                        </div>
-                        <div className="flex justify-between">
-                          <span className="text-gray-500">Presentasi</span>
-                          <span className="font-bold font-mono">4.80</span>
-                        </div>
-                      </div>
-                    </div>
-                  </div>
-                </CardContent>
-              </Card>
-
-              {/* Standings Top 5 */}
-              <Card className="shadow-lg border-0 overflow-hidden">
-                <CardHeader className="bg-gray-800 text-white border-b-0 pb-6 flex flex-row items-center justify-between">
-                  <div>
-                    <CardTitle className="text-xl font-bold uppercase tracking-wider flex items-center">
-                      <Trophy className="w-5 h-5 mr-3 text-yellow-400" />
-                      Klasemen Sementara Top 5
-                    </CardTitle>
-                    <p className="text-sm text-gray-400 mt-1">Kategori Senior Individual Putra • Babak Final Perebutan Medali</p>
-                  </div>
-                  <Badge variant="outline" className="bg-gray-700 text-gray-200 border-gray-600 flex items-center py-1 px-3">
-                    <RefreshCw className="w-3.5 h-3.5 mr-2 animate-spin-slow" />
-                    AUTO-REFRESH SETIAP 10 DETIK
-                  </Badge>
-                </CardHeader>
-                <div className="overflow-x-auto">
-                  <table className="w-full text-sm text-left">
-                    <thead className="bg-gray-700 text-gray-300 font-semibold uppercase text-xs">
-                      <tr>
-                        <th className="px-6 py-3">Peringkat</th>
-                        <th className="px-6 py-3">Nama Atlet</th>
-                        <th className="px-6 py-3">Kontingen</th>
-                        <th className="px-6 py-3 text-center">Rata-rata Akurasi</th>
-                        <th className="px-6 py-3 text-center">Rata-rata Presentasi</th>
-                        <th className="px-6 py-3 text-center">Total Poin Resmi</th>
-                        <th className="px-6 py-3">Status</th>
-                      </tr>
-                    </thead>
-                    <tbody className="divide-y divide-gray-200 bg-white">
-                      {/* Rank 1 */}
-                      <tr className="bg-yellow-50">
-                        <td className="px-6 py-4 font-bold text-lg text-yellow-600">#1</td>
-                        <td className="px-6 py-4 font-bold text-gray-900">Ahmad Zaki Kurniawan</td>
-                        <td className="px-6 py-4 font-medium text-gray-700">DKI Jakarta</td>
-                        <td className="px-6 py-4 text-center font-mono">3.700</td>
-                        <td className="px-6 py-4 text-center font-mono">4.783</td>
-                        <td className="px-6 py-4 text-center font-bold text-lg font-mono text-blue-700">8.483</td>
-                        <td className="px-6 py-4"><Badge className="bg-yellow-500 text-yellow-950 font-bold border border-yellow-400 shadow-sm hover:bg-yellow-600">EMAS (LEADER!)</Badge></td>
-                      </tr>
-                      {/* Rank 2 */}
-                      <tr className="bg-gray-50">
-                        <td className="px-6 py-4 font-bold text-lg text-gray-500">#2</td>
-                        <td className="px-6 py-4 font-bold text-gray-900">Rayhan Bagus Pratama</td>
-                        <td className="px-6 py-4 font-medium text-gray-700">Jawa Barat</td>
-                        <td className="px-6 py-4 text-center font-mono">3.650</td>
-                        <td className="px-6 py-4 text-center font-mono">4.700</td>
-                        <td className="px-6 py-4 text-center font-bold text-lg font-mono text-gray-700">8.350</td>
-                        <td className="px-6 py-4"><Badge className="bg-gray-300 text-gray-800 font-bold border border-gray-400 hover:bg-gray-400">PERAK SEMENTARA</Badge></td>
-                      </tr>
-                      {/* Rank 3 */}
-                      <tr className="bg-orange-50">
-                        <td className="px-6 py-4 font-bold text-lg text-orange-600">#3</td>
-                        <td className="px-6 py-4 font-bold text-gray-900">Muhammad Dimas Satria</td>
-                        <td className="px-6 py-4 font-medium text-gray-700">Jawa Tengah</td>
-                        <td className="px-6 py-4 text-center font-mono">3.617</td>
-                        <td className="px-6 py-4 text-center font-mono">4.666</td>
-                        <td className="px-6 py-4 text-center font-bold text-lg font-mono text-orange-700">8.283</td>
-                        <td className="px-6 py-4"><Badge className="bg-orange-300 text-orange-950 font-bold border border-orange-400 hover:bg-orange-400">PERUNGGU SEMENTARA</Badge></td>
-                      </tr>
-                      {/* Rank 4 */}
-                      <tr>
-                        <td className="px-6 py-4 font-semibold text-gray-600">#4</td>
-                        <td className="px-6 py-4 font-semibold text-gray-800">Kevin Pratama Yudha</td>
-                        <td className="px-6 py-4 text-gray-600">DI Yogyakarta</td>
-                        <td className="px-6 py-4 text-center font-mono text-gray-600">3.567</td>
-                        <td className="px-6 py-4 text-center font-mono text-gray-600">4.600</td>
-                        <td className="px-6 py-4 text-center font-bold font-mono text-gray-700">8.167</td>
-                        <td className="px-6 py-4"><Badge variant="outline" className="text-gray-600 bg-gray-100">PERINGKAT 4</Badge></td>
-                      </tr>
-                      {/* Rank 5 */}
-                      <tr>
-                        <td className="px-6 py-4 font-semibold text-gray-600">#5</td>
-                        <td className="px-6 py-4 font-semibold text-gray-800">Fajar Nugroho</td>
-                        <td className="px-6 py-4 text-gray-600">Banten</td>
-                        <td className="px-6 py-4 text-center font-mono text-gray-600">3.500</td>
-                        <td className="px-6 py-4 text-center font-mono text-gray-600">4.550</td>
-                        <td className="px-6 py-4 text-center font-bold font-mono text-gray-700">8.050</td>
-                        <td className="px-6 py-4"><Badge variant="outline" className="text-gray-600 bg-gray-100">PERINGKAT 5</Badge></td>
-                      </tr>
-                    </tbody>
-                  </table>
-                </div>
-                <div className="bg-gray-100 p-4 border-t text-sm text-gray-500 flex justify-between items-center">
-                  <p className="italic">Pencatatan skor disahkan oleh Referee Chair & Technical Delegate Kejurnas 2025.</p>
-                  <code className="bg-gray-200 px-2 py-1 rounded text-xs font-mono">SESSION TOKEN: ARENA1-FIN-0842-PUB</code>
-                </div>
-              </Card>
-            </TabsContent>
-
-            {/* TAB 3 - REKAPITULASI NILAI RESMI PDF */}
-            <TabsContent value="pdf" className="space-y-4">
-              <Card className="shadow-md">
-                <CardHeader className="bg-gray-50 border-b pb-4">
-                  <div className="flex flex-col md:flex-row justify-between items-start md:items-center gap-4">
-                    <CardTitle className="text-xl font-bold text-gray-800 flex items-center">
-                      <FileText className="w-5 h-5 mr-3 text-red-600" />
-                      Rekapitulasi Nilai Resmi
-                    </CardTitle>
-                    <div className="flex items-center space-x-3 w-full md:w-auto">
-                      <Select defaultValue="senior_pa">
-                        <SelectTrigger className="w-[200px] bg-white">
-                          <Filter className="w-4 h-4 mr-2 text-gray-400" />
-                          <SelectValue placeholder="Kategori" />
-                        </SelectTrigger>
-                        <SelectContent>
-                          <SelectItem value="senior_pa">Senior Individual Putra</SelectItem>
-                          <SelectItem value="senior_pi">Senior Individual Putri</SelectItem>
-                        </SelectContent>
-                      </Select>
-                      <Select defaultValue="final">
-                        <SelectTrigger className="w-[150px] bg-white">
-                          <Calendar className="w-4 h-4 mr-2 text-gray-400" />
-                          <SelectValue placeholder="Babak" />
-                        </SelectTrigger>
-                        <SelectContent>
-                          <SelectItem value="penyisihan">Penyisihan</SelectItem>
-                          <SelectItem value="semifinal">Semifinal</SelectItem>
-                          <SelectItem value="final">Final</SelectItem>
-                        </SelectContent>
-                      </Select>
-                    </div>
-                  </div>
-                </CardHeader>
-                <CardContent className="p-12 flex flex-col items-center justify-center text-center space-y-6 min-h-[400px]">
-                  <div className="bg-gray-100 p-6 rounded-full">
-                    <FileText className="w-16 h-16 text-gray-400" />
-                  </div>
-                  <div className="max-w-md">
-                    <h3 className="text-xl font-bold text-gray-800 mb-2">Dokumen Rekapitulasi Siap Diunduh</h3>
-                    <p className="text-gray-500 mb-6">
-                      Hasil resmi pertandingan kategori Senior Individual Putra - Babak Final telah disahkan dan siap untuk didistribusikan.
-                    </p>
-                    <Button className="w-full bg-red-700 hover:bg-red-800 text-white shadow-lg" size="lg">
-                      <Download className="w-5 h-5 mr-2" />
-                      Unduh Dokumen PDF Resmi (1.2 MB)
-                    </Button>
-                  </div>
-                  
-                  <div className="mt-8 pt-8 border-t border-gray-200 w-full max-w-md flex flex-col items-center">
-                    <p className="text-sm text-gray-500 mb-4 uppercase font-bold tracking-wider">Verifikasi Keaslian Dokumen</p>
-                    <div className="bg-white p-2 border shadow-sm rounded-lg mb-2">
-                      <QrCode className="w-24 h-24 text-gray-800" />
-                    </div>
-                    <p className="text-xs text-gray-400">Scan QR Code untuk memvalidasi tanda tangan digital TD</p>
-                  </div>
-                </CardContent>
-              </Card>
+              )}
             </TabsContent>
           </Tabs>
         </div>
       </main>
 
-      {/* BOTTOM STATUS BAR */}
-      <div className="bg-gray-900 text-gray-400 py-3 px-6 text-xs flex justify-between items-center z-10 border-t border-gray-800">
-        <div className="flex items-center">
-          <div className="w-2 h-2 bg-green-500 rounded-full mr-2"></div>
-          <span className="font-mono tracking-wider">WT OFFICIAL STANDARD SCORING ENGINE</span>
-        </div>
-        <div>
-          © 2024 Poomsae Online Tournament Management. Hak Cipta Dilindungi.
-        </div>
-      </div>
-      
       <PublicFooter />
+
+      {/* Recap Modal */}
+      <RecapModal 
+        isOpen={isRecapOpen} 
+        onClose={() => setIsRecapOpen(false)} 
+        matches={matches} 
+        settings={settings} 
+      />
     </div>
   );
 }

@@ -8,7 +8,8 @@ import {
   Database, PlaySquare, CheckCircle, XCircle, AlertTriangle, 
   RotateCcw, Download, Plus, Trash2, Edit, Save, RefreshCw,
   Video, Eye, Filter, ArrowRight, UserCheck, UserX, Award, Activity,
-  GitBranch, Monitor, BarChart3, Search, Play, Pause, Clock, ExternalLink
+  GitBranch, Monitor, BarChart3, Search, Play, Pause, Clock, ExternalLink,
+  Upload, FileSpreadsheet, Printer
 } from 'lucide-react';
 import { AdminLayout } from '@/components/shared/admin-layout';
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '@/components/ui/card';
@@ -16,175 +17,372 @@ import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription, DialogFooter, DialogTrigger } from '@/components/ui/dialog';
-import { TournamentSettings, Athlete, Judge, Category, User, Arena, Match, Schedule } from '@/types/database';
-import { formatScore, getInitials } from '@/lib/utils';
+import { TournamentSettings, Athlete, Judge, Category, User, Match, CategoryType, AthleteLevel, ParticipationType } from '@/types/database';
+import { formatScore, getYouTubeEmbedUrl } from '@/lib/utils';
+import { dbService } from '@/lib/db-service';
+import { processCutoffAndGenerateFinals, groupPemulaAthletes, determinePemulaMedal } from '@/lib/bracket-logic';
+import { RecapModal } from '@/components/shared/recap-modal';
+import { ImportAthletesModal } from '@/components/shared/import-athletes';
 
 function AdminContent() {
   const searchParams = useSearchParams();
   const router = useRouter();
-  const tabParam = searchParams.get('tab') as any;
+  const tabParam = searchParams.get('tab');
 
-  const [activeTab, setActiveTab] = useState<'console' | 'wasit' | 'jadwal' | 'verifikasi' | 'bracket' | 'lcd' | 'klasemen' | 'reset'>(
-    tabParam || 'console'
+  const [activeTab, setActiveTab] = useState<'console' | 'settings' | 'verifikasi' | 'wasit' | 'bracket' | 'rekap' | 'reset'>(
+    tabParam === 'klasemen' ? 'rekap' : (tabParam as any) || 'console'
   );
 
   useEffect(() => {
     if (tabParam) {
-      setActiveTab(tabParam);
+      setActiveTab(tabParam === 'klasemen' ? 'rekap' : (tabParam as any));
     }
   }, [tabParam]);
 
-  const [loading, setLoading] = useState(false);
-  const [alertMessage, setAlertMessage] = useState('');
+  const [pemulaGroups, setPemulaGroups] = useState<{ groupName: string; athletes: Athlete[] }[]>([]);
+  const [selectedQueueArena, setSelectedQueueArena] = useState<Record<string, 'A' | 'B' | 'C'>>({});
 
-  // 1. Settings State
-  const [settings, setSettings] = useState<TournamentSettings>({
-    id: 'a0000000-0000-0000-0000-000000000001',
-    name: 'Kejuaraan Nasional Taekwondo Poomsae 2025',
-    arena_count: 3,
-    arena_format: 'huruf',
-    judges_per_session: 5,
-    has_backup_judge: true,
-    forms_count: 2,
-    speed_kick_body_point: 1.0,
-    speed_kick_head_point: 3.0,
-    speed_kick_spin_head_point: 4.0,
-    minor_deduction: 0.10,
-    major_deduction: 0.30,
-    gamjeom_penalty: 0.30,
-    accuracy_base: 4.00,
-    presentation_max: 6.00,
-    presentation_component_min: 0.50,
-    presentation_component_max: 2.00,
-    presentation_step: 0.05,
-    max_total_score: 10.00,
-    cutoff_high_low: true,
-    tiebreak_method: 'presentation',
-    location: 'GOR Cakrawala Ciracas, Jakarta Timur',
-    start_date: '2025-10-18',
-    end_date: '2025-10-20',
-    organizer: 'Federasi Taekwondo Indonesia (PBTI)',
-    created_at: '',
-    updated_at: ''
+  const [alertMessage, setAlertMessage] = useState('');
+  const [isRecapOpen, setIsRecapOpen] = useState(false);
+  const [isImportOpen, setIsImportOpen] = useState(false);
+
+  // Real-time Database State
+  const [settings, setSettings] = useState<TournamentSettings>(dbService.getSettings());
+  const [athletes, setAthletes] = useState<Athlete[]>(dbService.getAthletes());
+  const [judges, setJudges] = useState<Judge[]>(dbService.getJudges());
+  const [users, setUsers] = useState<User[]>(dbService.getUsers());
+  const [matches, setMatches] = useState<Match[]>(dbService.getMatches());
+
+  // Subscribe to dbService
+  useEffect(() => {
+    const handleSync = () => {
+      setSettings(dbService.getSettings());
+      setAthletes(dbService.getAthletes());
+      setJudges(dbService.getJudges());
+      setUsers(dbService.getUsers());
+      setMatches(dbService.getMatches());
+    };
+
+    handleSync();
+    const unsub = dbService.subscribe(handleSync);
+    return () => unsub();
+  }, []);
+
+  // Form states
+  const [searchAthlete, setSearchAthlete] = useState('');
+  const [searchJudge, setSearchJudge] = useState('');
+  const [selectedArenaConsole, setSelectedArenaConsole] = useState<'A' | 'B' | 'C'>('A');
+
+  // New Athlete state
+  const [newAthlete, setNewAthlete] = useState({
+    name: '',
+    athlete2_name: '',
+    category_type: 'prestasi' as CategoryType,
+    level: 'prestasi' as AthleteLevel,
+    participation_type: 'individu' as ParticipationType,
+    contingent: '',
+    province: 'DKI Jakarta',
+    gender: 'Putra' as 'Putra' | 'Putri' | 'Campuran',
+    dan_level: 'Dan I',
+    youtube_url: '',
   });
 
-  // 2. Master Wasit / Juri State
-  const [judges, setJudges] = useState<Judge[]>([
-    { id: '1', name: 'Master Bambang Suryanto', judge_code: 'J-2025-001', pin: '142536', rank: 'Wasit Nasional Utama', organization: 'PBTI Pusat', status: 'active', is_online: true, last_ping: null, created_at: '', updated_at: '' },
-    { id: '2', name: 'Sabeum Liem Wen', judge_code: 'J-2025-002', pin: '253647', rank: 'Wasit Nasional Madya', organization: 'Pengprov DKI', status: 'active', is_online: true, last_ping: null, created_at: '', updated_at: '' },
-    { id: '3', name: 'Master Eko Prasetyo', judge_code: 'J-2025-003', pin: '364758', rank: 'Wasit Nasional Madya', organization: 'Pengprov DKI', status: 'active', is_online: true, last_ping: null, created_at: '', updated_at: '' },
-    { id: '4', name: 'Sabeum Nuraini Dewi', judge_code: 'J-2025-004', pin: '475869', rank: 'Wasit Nasional Muda', organization: 'Pengcab Jabar', status: 'active', is_online: true, last_ping: null, created_at: '', updated_at: '' },
-    { id: '5', name: 'Sabeumnim Hendra Cahyadi', judge_code: 'J-2025-005', pin: '586970', rank: 'Wasit Nasional Madya', organization: 'Pengprov Jateng', status: 'active', is_online: true, last_ping: null, created_at: '', updated_at: '' },
-  ]);
-  const [searchJudge, setSearchJudge] = useState('');
-  const [newJudge, setNewJudge] = useState({ name: '', judge_code: '', pin: '', rank: 'Wasit Nasional Madya', organization: '' });
+  // New Judge state
+  const [newJudge, setNewJudge] = useState({
+    name: '',
+    judge_code: '',
+    pin: '',
+    rank: 'Wasit Nasional Madya',
+    organization: 'PBTI',
+    assigned_arena: 'A',
+    position: 'J1' as 'J1' | 'J2' | 'J3' | 'J4' | 'J5' | 'cadangan',
+    is_backup: false,
+  });
 
-  // 3. Poomsae Forms & Schedules
-  const [forms] = useState([
-    { id: '1', name: 'Taegeuk 1 Jang', level: 'Dasar (Geup 8)', desc: 'Keon (Langit)' },
-    { id: '2', name: 'Taegeuk 2 Jang', level: 'Dasar (Geup 7)', desc: 'Tae (Danau)' },
-    { id: '3', name: 'Taegeuk 3 Jang', level: 'Dasar (Geup 6)', desc: 'Ri (Api)' },
-    { id: '4', name: 'Taegeuk 4 Jang', level: 'Dasar (Geup 5)', desc: 'Jin (Guntur)' },
-    { id: '5', name: 'Taegeuk 5 Jang', level: 'Menengah (Geup 4)', desc: 'Son (Angin)' },
-    { id: '6', name: 'Taegeuk 6 Jang', level: 'Menengah (Geup 3)', desc: 'Gam (Air)' },
-    { id: '7', name: 'Taegeuk 7 Jang', level: 'Lanjutan (Geup 2)', desc: 'Gan (Gunung)' },
-    { id: '8', name: 'Taegeuk 8 Jang', level: 'Lanjutan (Geup 1)', desc: 'Gon (Bumi)' },
-    { id: '9', name: 'Koryo', level: 'Dan I', desc: 'Poomsae Dan I' },
-    { id: '10', name: 'Keumgang', level: 'Dan II', desc: 'Poomsae Dan II' },
-    { id: '11', name: 'Taebaek', level: 'Dan III', desc: 'Poomsae Dan III' },
-    { id: '12', name: 'Pyongwon', level: 'Dan IV', desc: 'Poomsae Dan IV' },
-  ]);
+  // New User state
+  const [newUser, setNewUser] = useState({
+    name: '',
+    username: '',
+    pin: '',
+    email: '',
+    role: 'operator' as User['role'],
+    assigned_arena: 'A',
+  });
 
-  // 4. Athletes State
-  const [athletes, setAthletes] = useState<Athlete[]>([
-    { id: '1', name: 'Ahmad Zaki Kurniawan', initials: 'AZK', category_id: '1', type: 'prestasi', contingent: 'Pengprov DKI Jakarta', province: 'DKI Jakarta', age_group: 'Senior', gender: 'Putra', dan_level: 'Dan III', youtube_url: 'https://youtube.com/watch?v=dQw4w9WgXcQ', verification_status: 'terverifikasi', verification_notes: '', created_at: '', updated_at: '' },
-    { id: '2', name: 'Rayhan Bagus Pratama', initials: 'RBP', category_id: '1', type: 'prestasi', contingent: 'Pengcab Jawa Barat', province: 'Jawa Barat', age_group: 'Senior', gender: 'Putra', dan_level: 'Dan II', youtube_url: 'https://youtube.com/watch?v=dQw4w9WgXcQ', verification_status: 'terverifikasi', verification_notes: '', created_at: '', updated_at: '' },
-    { id: '3', name: 'Muhammad Dimas Satria', initials: 'MDS', category_id: '1', type: 'prestasi', contingent: 'Pengprov Jawa Tengah', province: 'Jawa Tengah', age_group: 'Senior', gender: 'Putra', dan_level: 'Dan II', youtube_url: 'https://youtube.com/watch?v=dQw4w9WgXcQ', verification_status: 'terverifikasi', verification_notes: '', created_at: '', updated_at: '' },
-    { id: '4', name: 'Rian Faturrahman', initials: 'RF', category_id: '2', type: 'pemula', contingent: 'Pengprov Jawa Timur', province: 'Jawa Timur', age_group: 'Junior', gender: 'Putra', dan_level: 'Dan I', youtube_url: 'https://youtube.com/watch?v=dQw4w9WgXcQ', verification_status: 'menunggu', verification_notes: '', created_at: '', updated_at: '' },
-    { id: '5', name: 'Maya Anggraini', initials: 'MA', category_id: '1', type: 'prestasi', contingent: 'Pengprov Bali', province: 'Bali', age_group: 'Senior', gender: 'Putri', dan_level: 'Dan II', youtube_url: 'https://youtube.com/watch?v=dQw4w9WgXcQ', verification_status: 'menunggu', verification_notes: '', created_at: '', updated_at: '' },
-    { id: '6', name: 'Dimas Hendrawan', initials: 'DH', category_id: '1', type: 'prestasi', contingent: 'Pengprov Sumut', province: 'Sumatera Utara', age_group: 'U-30', gender: 'Putra', dan_level: 'Dan III', youtube_url: 'https://youtube.com/watch?v=dQw4w9WgXcQ', verification_status: 'menunggu', verification_notes: '', created_at: '', updated_at: '' },
-  ]);
-  const [newAthlete, setNewAthlete] = useState({ name: '', type: 'prestasi' as 'prestasi' | 'pemula' | 'speed_kick', contingent: '', province: '', gender: 'Putra' as 'Putra' | 'Putri', dan_level: 'Dan I', youtube_url: '' });
+  // Settings form state
+  const [settingsForm, setSettingsForm] = useState<TournamentSettings>(settings);
+  useEffect(() => {
+    setSettingsForm(settings);
+  }, [settings]);
 
-  // Reset Input
+  // Reset Input state
   const [resetInput, setResetInput] = useState('');
 
-  // Actions
+  // Athlete Actions
   const handleVerifyAthlete = (id: string, status: 'terverifikasi' | 'ditolak') => {
-    setAthletes(prev => prev.map(a => a.id === id ? { ...a, verification_status: status } : a));
-    setAlertMessage(`Status atlet berhasil diubah menjadi ${status.toUpperCase()}`);
+    const ath = athletes.find(a => a.id === id);
+    if (!ath) return;
+    const updated = { ...ath, verification_status: status };
+    dbService.updateAthlete(updated);
+    setAlertMessage(`Status atlet "${ath.name}" berhasil diubah menjadi ${status.toUpperCase()}`);
   };
 
-  const handleAddJudge = () => {
-    if (!newJudge.name || !newJudge.judge_code) return;
-    const j: Judge = {
-      id: Date.now().toString(),
-      name: newJudge.name,
-      judge_code: newJudge.judge_code,
-      pin: newJudge.pin || '123456',
-      rank: newJudge.rank,
-      organization: newJudge.organization || 'PBTI',
-      status: 'active',
-      is_online: true,
-      last_ping: null,
-      created_at: '',
-      updated_at: ''
-    };
-    setJudges(prev => [...prev, j]);
-    setNewJudge({ name: '', judge_code: '', pin: '', rank: 'Wasit Nasional Madya', organization: '' });
-    setAlertMessage('Wasit baru berhasil ditambahkan ke database!');
+  const handleUpdateYouTubeUrl = (id: string, url: string) => {
+    const ath = athletes.find(a => a.id === id);
+    if (!ath) return;
+    const updated = { ...ath, youtube_url: url };
+    dbService.updateAthlete(updated);
+    setAlertMessage(`Tautan YouTube atlet "${ath.name}" berhasil diperbarui!`);
   };
 
-  const handleAddAthlete = () => {
+  const handleCreateAthlete = (e: React.FormEvent) => {
+    e.preventDefault();
     if (!newAthlete.name) return;
-    const a: Athlete = {
-      id: Date.now().toString(),
+
+    const athlete: Athlete = {
+      id: `ath-${Date.now()}`,
       name: newAthlete.name,
-      initials: getInitials(newAthlete.name),
-      category_id: '1',
-      type: newAthlete.type,
-      contingent: newAthlete.contingent,
+      athlete2_name: newAthlete.participation_type === 'pair' ? newAthlete.athlete2_name : null,
+      initials: newAthlete.name.split(' ').map(w => w[0]).join('').slice(0, 3).toUpperCase(),
+      category_id: `cat-${newAthlete.category_type}`,
+      category_name: `${newAthlete.gender} ${newAthlete.category_type === 'festival' ? 'Festival' : newAthlete.category_type === 'speed_kick' ? 'Speed Kick' : 'Prestasi'} ${newAthlete.participation_type === 'pair' ? 'Pair' : 'Individu'}`,
+      category_type: newAthlete.category_type,
+      level: newAthlete.level,
+      participation_type: newAthlete.participation_type,
+      contingent: newAthlete.contingent || '-',
       province: newAthlete.province,
       age_group: 'Senior',
       gender: newAthlete.gender,
       dan_level: newAthlete.dan_level,
-      youtube_url: newAthlete.youtube_url,
-      verification_status: 'menunggu',
-      verification_notes: '',
-      created_at: '',
-      updated_at: ''
+      youtube_url: newAthlete.youtube_url || null,
+      verification_status: 'terverifikasi',
+      verification_notes: 'Didaftarkan langsung oleh Admin',
+      created_at: new Date().toISOString(),
+      updated_at: new Date().toISOString(),
     };
-    setAthletes(prev => [a, ...prev]);
-    setNewAthlete({ name: '', type: 'prestasi', contingent: '', province: '', gender: 'Putra', dan_level: 'Dan I', youtube_url: '' });
-    setAlertMessage('Pendaftaran atlet berhasil ditambahkan!');
+
+    dbService.addAthlete(athlete);
+    setAlertMessage(`Atlet "${athlete.name}" berhasil ditambahkan.`);
+    setNewAthlete({
+      name: '',
+      athlete2_name: '',
+      category_type: 'prestasi',
+      level: 'prestasi',
+      participation_type: 'individu',
+      contingent: '',
+      province: 'DKI Jakarta',
+      gender: 'Putra',
+      dan_level: 'Dan I',
+      youtube_url: '',
+    });
   };
 
-  const handleResetTournament = () => {
-    if (resetInput !== 'RESET') return;
-    setResetInput('');
-    setAlertMessage('Turnamen berhasil di-reset ke kondisi awal!');
+  // Judge Actions
+  const handleCreateJudge = (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!newJudge.name || !newJudge.judge_code) return;
+
+    const j: Judge = {
+      id: `j-${Date.now()}`,
+      name: newJudge.name,
+      judge_code: newJudge.judge_code,
+      pin: newJudge.pin || '123456',
+      rank: newJudge.rank,
+      organization: newJudge.organization,
+      assigned_arena: newJudge.assigned_arena,
+      position: newJudge.position,
+      is_backup: newJudge.position === 'cadangan',
+      status: 'active',
+      is_online: true,
+      last_ping: null,
+      created_at: new Date().toISOString(),
+      updated_at: new Date().toISOString(),
+    };
+
+    dbService.addJudge(j);
+    setAlertMessage(`Juri "${j.name}" (${j.judge_code}) berhasil ditambahkan ke Arena ${j.assigned_arena}.`);
+    setNewJudge({
+      name: '',
+      judge_code: '',
+      pin: '',
+      rank: 'Wasit Nasional Madya',
+      organization: 'PBTI',
+      assigned_arena: 'A',
+      position: 'J1',
+      is_backup: false,
+    });
   };
 
-  const filteredJudges = judges.filter(j => 
-    j.name.toLowerCase().includes(searchJudge.toLowerCase()) || 
-    j.judge_code.toLowerCase().includes(searchJudge.toLowerCase()) ||
-    (j.organization && j.organization.toLowerCase().includes(searchJudge.toLowerCase()))
+  // User Actions
+  const handleCreateUser = (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!newUser.name || !newUser.username) return;
+
+    const u: User = {
+      id: `u-${Date.now()}`,
+      name: newUser.name,
+      username: newUser.username,
+      pin: newUser.pin || '1234',
+      email: newUser.email || `${newUser.username}@pbti-poomsae.id`,
+      role: newUser.role,
+      assigned_arena: newUser.assigned_arena,
+      status: 'active',
+      created_at: new Date().toISOString(),
+      updated_at: new Date().toISOString(),
+    };
+
+    dbService.addUser(u);
+    setAlertMessage(`Petugas "${u.name}" (Role: ${u.role}) berhasil ditambahkan.`);
+    setNewUser({
+      name: '',
+      username: '',
+      pin: '',
+      email: '',
+      role: 'operator',
+      assigned_arena: 'A',
+    });
+  };
+
+  // Settings Save
+  const handleSaveSettings = (e: React.FormEvent) => {
+    e.preventDefault();
+    dbService.updateSettings(settingsForm);
+    setAlertMessage('Pengaturan kejuaraan berhasil disimpan dan disinkronkan ke seluruh stasiun!');
+  };
+
+  // Cut-off & Bracket Generation
+  const handleRunCutoff = () => {
+    const arenaMatches = matches.filter(m => m.arena_code === selectedArenaConsole);
+    const result = processCutoffAndGenerateFinals(arenaMatches, 300);
+    if (result.advancedMatches.length === 0) {
+      setAlertMessage('Belum ada partai penyisihan dengan skor selesai untuk diproses cut-off.');
+      return;
+    }
+    dbService.addMatches(result.advancedMatches);
+    setAlertMessage(`Berhasil memproses Cut-Off! ${result.advancedMatches.length} atlet lolos ke babak Final dengan urutan nilai terkecil ke terbesar.`);
+  };
+
+  // Queue Athlete to Arena Match
+  const handleQueueAthlete = (athlete: Athlete, arena: 'A' | 'B' | 'C') => {
+    const arenaMatches = matches.filter(m => m.arena_code === arena);
+    const baseNumber = arena === 'A' ? 100 : arena === 'B' ? 200 : 300;
+    const maxMatchNum = arenaMatches.reduce((max, m) => Math.max(max, m.match_number), baseNumber);
+    const newMatchNum = maxMatchNum + 1;
+
+    const newMatch: Match = {
+      id: `match-${Date.now()}-${athlete.id}`,
+      match_number: newMatchNum,
+      arena_code: arena,
+      athlete_id: athlete.id,
+      athlete,
+      category_name: athlete.category_name,
+      category_type: athlete.category_type,
+      level: athlete.level,
+      participation_type: athlete.participation_type,
+      round: athlete.level === 'pemula' ? 'final' : 'penyisihan',
+      forms_count: athlete.category_type === 'speed_kick' ? 1 : settings.forms_count,
+      poomsae_1: athlete.category_type === 'speed_kick' ? 'Speed Kicking 60 Detik' : 'Taegeuk 1 Jang',
+      poomsae_2: (athlete.category_type === 'speed_kick' || settings.forms_count === 1) ? null : 'Taegeuk 2 Jang',
+      active_form: 1,
+      status: 'menunggu',
+      is_current: false,
+      operator_notes: `Dijadwalkan oleh Admin`,
+      final_score: null,
+      scores: { form1_scores: {}, form2_scores: {} },
+      started_at: null,
+      completed_at: null,
+      created_at: new Date().toISOString(),
+      updated_at: new Date().toISOString(),
+    };
+
+    dbService.addMatches([newMatch]);
+    setAlertMessage(`Atlet "${athlete.name}" berhasil dimasukkan ke antrean Partai #${newMatchNum} Lapangan ${arena}!`);
+  };
+
+  // Group Pemula / Festival Athletes into Pools of 3
+  const handleGeneratePemulaPools = () => {
+    const pemulaAthletes = athletes.filter(a => a.level === 'pemula' || a.category_type === 'festival');
+    if (pemulaAthletes.length === 0) {
+      setAlertMessage('Tidak ditemukan atlet berkategori Festival atau tingkatan Pemula.');
+      return;
+    }
+    const groups = groupPemulaAthletes(pemulaAthletes);
+    setPemulaGroups(groups);
+    setAlertMessage(`Berhasil membentuk ${groups.length} pool grup untuk ${pemulaAthletes.length} atlet Pemula/Festival!`);
+  };
+
+  // Schedule all Pemula groups into Arena matches
+  const handleSchedulePemulaPools = (targetArena: 'A' | 'B' | 'C') => {
+    if (pemulaGroups.length === 0) return;
+    const baseNumber = targetArena === 'A' ? 100 : targetArena === 'B' ? 200 : 300;
+    const arenaMatches = matches.filter(m => m.arena_code === targetArena);
+    let currentNum = arenaMatches.reduce((max, m) => Math.max(max, m.match_number), baseNumber);
+
+    const newMatches: Match[] = [];
+    pemulaGroups.forEach(grp => {
+      grp.athletes.forEach(ath => {
+        currentNum++;
+        newMatches.push({
+          id: `match-pemula-${grp.groupName}-${ath.id}-${Date.now()}`,
+          match_number: currentNum,
+          arena_code: targetArena,
+          athlete_id: ath.id,
+          athlete: ath,
+          category_name: ath.category_name,
+          category_type: ath.category_type,
+          level: ath.level,
+          participation_type: ath.participation_type,
+          round: 'final',
+          forms_count: ath.category_type === 'speed_kick' ? 1 : settings.forms_count,
+          poomsae_1: ath.category_type === 'speed_kick' ? 'Speed Kicking 60 Detik' : 'Taegeuk 1 Jang',
+          poomsae_2: null,
+          active_form: 1,
+          status: 'menunggu',
+          is_current: false,
+          operator_notes: `${grp.groupName} - Perebutan Medali`,
+          final_score: null,
+          scores: { form1_scores: {}, form2_scores: {} },
+          started_at: null,
+          completed_at: null,
+          created_at: new Date().toISOString(),
+          updated_at: new Date().toISOString(),
+        });
+      });
+    });
+
+    dbService.addMatches(newMatches);
+    setAlertMessage(`Berhasil menjadwalkan ${newMatches.length} partai untuk seluruh grup Pemula ke Lapangan ${targetArena}!`);
+  };
+
+  // Filtered queries
+  const filteredAthletes = athletes.filter(a => 
+    a.name.toLowerCase().includes(searchAthlete.toLowerCase()) ||
+    (a.contingent && a.contingent.toLowerCase().includes(searchAthlete.toLowerCase())) ||
+    (a.athlete2_name && a.athlete2_name.toLowerCase().includes(searchAthlete.toLowerCase()))
   );
 
+  const filteredJudges = judges.filter(j =>
+    j.name.toLowerCase().includes(searchJudge.toLowerCase()) ||
+    j.judge_code.toLowerCase().includes(searchJudge.toLowerCase())
+  );
+
+  // Active match for Match Console
+  const currentArenaMatch = matches.find(m => m.arena_code === selectedArenaConsole && m.is_current) ||
+                            matches.find(m => m.arena_code === selectedArenaConsole);
+
   return (
-    <AdminLayout role="admin" title="Pusat Kendali Turnamen: Kejurnas Poomsae 2025">
+    <AdminLayout role="admin" title="Pusat Kendali Turnamen: PBTI Poomsae & Speed Kicking">
       <div className="space-y-6">
-        {/* Navigation Tabs (8 Menus from Section 5 of Brief) */}
+        {/* Navigation Tabs */}
         <div className="flex items-center gap-1.5 overflow-x-auto pb-2 border-b border-gray-200">
           {[
             { id: 'console', label: '1. Match Console', icon: Activity },
-            { id: 'wasit', label: '2. Database Wasit', icon: Database },
-            { id: 'jadwal', label: '3. Jadwal & Gerakan', icon: Calendar },
-            { id: 'verifikasi', label: '4. Verifikasi Atlet', icon: Shield },
-            { id: 'bracket', label: '5. Cut-Off Bracket', icon: GitBranch },
-            { id: 'lcd', label: '6. LCD Proyektor', icon: Monitor },
-            { id: 'klasemen', label: '7. Klasemen Live', icon: BarChart3 },
-            { id: 'reset', label: '8. Reset Turnamen', icon: RotateCcw, danger: true },
+            { id: 'settings', label: '2. Pengaturan Sistem', icon: Settings },
+            { id: 'verifikasi', label: '3. Data & Verifikasi Atlet', icon: Shield },
+            { id: 'wasit', label: '4. Master Wasit & User', icon: Database },
+            { id: 'bracket', label: '5. Bagan, Cut-Off & Jadwal', icon: GitBranch },
+            { id: 'rekap', label: '6. Klasemen & Rekapitulasi', icon: BarChart3 },
+            { id: 'reset', label: '7. Reset Turnamen', icon: RotateCcw, danger: true },
           ].map((item) => {
             const Icon = item.icon;
             const isActive = activeTab === item.id;
@@ -207,318 +405,715 @@ function AdminContent() {
 
         {/* Global Notification */}
         {alertMessage && (
-          <div className="bg-emerald-50 border border-emerald-200 text-emerald-800 px-4 py-3 rounded-xl flex items-center justify-between">
-            <div className="flex items-center gap-2 text-sm font-semibold">
-              <CheckCircle className="h-4 w-4 text-emerald-600" />
+          <div className="bg-emerald-50 border border-emerald-200 text-emerald-800 px-4 py-3 rounded-xl flex items-center justify-between text-xs font-semibold">
+            <div className="flex items-center gap-2">
+              <CheckCircle className="h-4 w-4 text-emerald-600 shrink-0" />
               <span>{alertMessage}</span>
             </div>
-            <button onClick={() => setAlertMessage('')} className="text-emerald-700 hover:text-emerald-900 font-bold text-xs cursor-pointer">Tutup</button>
+            <button onClick={() => setAlertMessage('')} className="text-emerald-700 hover:text-emerald-900 font-bold">Tutup</button>
           </div>
         )}
 
         {/* ============================================================ */}
-        {/* 1. MATCH CONSOLE (DASHBOARD) */}
+        {/* TAB 1: MATCH CONSOLE */}
         {/* ============================================================ */}
         {activeTab === 'console' && (
           <div className="space-y-6">
-            {/* Top Bar Banner matching Screenshot 2 */}
-            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 bg-white p-6 rounded-2xl border border-gray-200 shadow-xs">
-              <div>
-                <div className="flex items-center gap-2 mb-1">
-                  <Badge variant="destructive" className="bg-[#C8102E] text-[10px] uppercase font-bold">
-                    TURNAMEN TINGKAT NASIONAL
-                  </Badge>
-                  <span className="flex items-center gap-1 text-xs text-emerald-600 font-bold">
-                    <span className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse" />
-                    Koneksi Stabil (Ping 18ms)
-                  </span>
-                </div>
-                <h2 className="text-2xl font-black text-gray-900">Pusat Kendali Turnamen: Kejurnas Poomsae 2025</h2>
-                <p className="text-xs text-gray-500 font-medium">Federasi Taekwondo Indonesia • Gelanggang Olahraga Remaja Senayan • Sesi 02 - Babak Eliminasi Utama</p>
+            {/* Arena Selector */}
+            <div className="bg-white p-4 rounded-2xl border border-gray-200 shadow-xs flex flex-wrap items-center justify-between gap-4">
+              <div className="flex items-center gap-3">
+                <span className="text-xs font-bold text-gray-500 uppercase">Pilih Arena Pemantauan:</span>
+                {(['A', 'B', 'C'] as const).map(code => (
+                  <button
+                    key={code}
+                    onClick={() => setSelectedArenaConsole(code)}
+                    className={`px-4 py-2 rounded-xl font-black text-xs transition-all cursor-pointer ${
+                      selectedArenaConsole === code ? 'bg-[#C8102E] text-white shadow-md' : 'bg-gray-100 text-gray-700 hover:bg-gray-200'
+                    }`}
+                  >
+                    Lapangan {code}
+                  </button>
+                ))}
               </div>
 
               <div className="flex items-center gap-2">
-                <Button variant="outline" size="sm" onClick={() => setAlertMessage('Laporan Kejuaraan siap diunduh dalam format PDF.')} className="font-bold">
-                  <Download className="h-4 w-4" /> Unduh Laporan Lengkap
+                <Button 
+                  variant="outline" 
+                  size="sm" 
+                  onClick={() => setIsRecapOpen(true)}
+                  className="text-xs font-bold gap-1.5"
+                >
+                  <FileSpreadsheet className="w-4 h-4 text-emerald-600" /> Buka Rekap Skor
                 </Button>
-                <Button variant="destructive" size="sm" onClick={() => setAlertMessage('Semua partai di seluruh arena telah dijeda oleh Admin.')} className="font-bold bg-[#C8102E]">
-                  Jeda Semua Partai
-                </Button>
+                <Link href={`/media?arena=${selectedArenaConsole}`} target="_blank">
+                  <Button variant="default" size="sm" className="text-xs font-bold gap-1.5 bg-[#C8102E] hover:bg-[#9B0C23]">
+                    <Monitor className="w-4 h-4" /> Buka Layar Media Lap. {selectedArenaConsole}
+                  </Button>
+                </Link>
               </div>
             </div>
 
-            {/* 4 Statistics Cards matching Screenshot 2 */}
-            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
-              <Card>
-                <CardContent className="p-5">
-                  <div className="flex items-center justify-between">
-                    <div>
-                      <p className="text-[11px] text-gray-400 font-bold uppercase">TOTAL ATLET BERTANDING</p>
-                      <h3 className="text-3xl font-black text-gray-900 mt-1">248 <span className="text-xs font-normal text-gray-500">Atlet</span></h3>
-                      <p className="text-xs text-emerald-600 font-semibold mt-1">✓ 14 Kategori Terdaftar Lengkap</p>
-                    </div>
-                    <div className="w-12 h-12 rounded-2xl bg-blue-50 flex items-center justify-center text-blue-600">
-                      <Users className="h-6 w-6" />
-                    </div>
-                  </div>
-                </CardContent>
-              </Card>
-
-              <Card>
-                <CardContent className="p-5">
-                  <div className="flex items-center justify-between">
-                    <div>
-                      <p className="text-[11px] text-gray-400 font-bold uppercase">PARTAI SELESAI / TOTAL</p>
-                      <h3 className="text-3xl font-black text-gray-900 mt-1">86 <span className="text-sm font-normal text-gray-400">/ 120</span></h3>
-                      <p className="text-xs text-gray-500 font-semibold mt-1">Progress: 71.6% Sisa 34 Partai</p>
-                    </div>
-                    <div className="w-12 h-12 rounded-2xl bg-emerald-50 flex items-center justify-center text-emerald-600">
-                      <CheckCircle className="h-6 w-6" />
-                    </div>
-                  </div>
-                </CardContent>
-              </Card>
-
-              <Card>
-                <CardContent className="p-5">
-                  <div className="flex items-center justify-between">
-                    <div>
-                      <p className="text-[11px] text-gray-400 font-bold uppercase">ARENA AKTIF</p>
-                      <h3 className="text-3xl font-black text-gray-900 mt-1">3 <span className="text-xs font-normal text-gray-500">Ring Berjalan</span></h3>
-                      <div className="flex gap-1.5 mt-2">
-                        <span className="text-[10px] font-bold bg-gray-100 px-2 py-0.5 rounded text-gray-700">Ring A</span>
-                        <span className="text-[10px] font-bold bg-gray-100 px-2 py-0.5 rounded text-gray-700">Ring B</span>
-                        <span className="text-[10px] font-bold bg-gray-100 px-2 py-0.5 rounded text-gray-700">Ring C</span>
-                      </div>
-                    </div>
-                    <div className="w-12 h-12 rounded-2xl bg-amber-50 flex items-center justify-center text-amber-600">
-                      <PlaySquare className="h-6 w-6" />
-                    </div>
-                  </div>
-                </CardContent>
-              </Card>
-
-              <Card>
-                <CardContent className="p-5">
-                  <div className="flex items-center justify-between">
-                    <div>
-                      <p className="text-[11px] text-gray-400 font-bold uppercase">JURI BERTUGAS</p>
-                      <h3 className="text-3xl font-black text-gray-900 mt-1">15 <span className="text-xs font-normal text-gray-500">Juri Aktif</span></h3>
-                      <p className="text-xs text-emerald-600 font-semibold mt-1">● Semua Perangkat Tablet Online</p>
-                    </div>
-                    <div className="w-12 h-12 rounded-2xl bg-red-50 flex items-center justify-center text-[#C8102E]">
-                      <Shield className="h-6 w-6" />
-                    </div>
-                  </div>
-                </CardContent>
-              </Card>
-            </div>
-
-            {/* Live Match Control per Arena */}
-            <Card className="border-t-4 border-t-[#C8102E]">
-              <CardHeader className="flex flex-row items-center justify-between pb-3">
-                <div>
-                  <CardTitle className="text-lg flex items-center gap-2">
-                    <span className="w-3 h-3 rounded-full bg-red-600 animate-pulse" />
-                    Live Match Control
-                  </CardTitle>
-                  <CardDescription>Partai yang Sedang Berlangsung & Pemantauan Input Nilai Real-time</CardDescription>
-                </div>
-                <span className="text-xs text-gray-400 font-semibold">Update Otomatis Tiap 1 Detik</span>
-              </CardHeader>
-              <CardContent className="space-y-4">
-                {/* Arena A */}
-                <div className="bg-gray-50 p-5 rounded-2xl border border-gray-200 grid grid-cols-1 md:grid-cols-4 gap-4 items-center">
-                  <div className="flex items-center gap-4 md:col-span-2">
-                    <div className="w-12 h-12 rounded-2xl bg-[#C8102E] text-white flex items-center justify-center font-black text-lg shadow-md flex-shrink-0">
-                      A
-                    </div>
+            {/* Active Match Card */}
+            {currentArenaMatch ? (
+              <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
+                <Card className="lg:col-span-2 border-t-4 border-t-[#C8102E]">
+                  <CardHeader className="flex flex-row items-center justify-between pb-3">
                     <div>
                       <div className="flex items-center gap-2">
-                        <Badge variant="destructive" className="text-[10px] bg-red-600 font-bold">PARTAI #42</Badge>
-                        <span className="text-xs font-bold text-gray-700">Senior Putra Individual</span>
-                        <Badge variant="success" className="text-[10px]">SEDANG DINILAI (LIVE)</Badge>
+                        <span className="w-2.5 h-2.5 rounded-full bg-red-600 animate-pulse" />
+                        <CardTitle className="text-base">Partai Aktif: Lapangan {selectedArenaConsole}</CardTitle>
                       </div>
-                      <h4 className="text-lg font-black text-gray-900 mt-1">Ahmad Zaki <span className="text-xs font-normal text-gray-500">• Pengprov DKI Jakarta</span></h4>
-                      <p className="text-xs text-[#C8102E] font-bold">Wajib Poomsae: Koryo (Poomsae 9)</p>
+                      <CardDescription className="text-xs">Partai #{currentArenaMatch.match_number} • {currentArenaMatch.category_name}</CardDescription>
                     </div>
-                  </div>
-
-                  <div className="text-center bg-white p-3 rounded-xl border border-gray-200">
-                    <div className="text-xs text-gray-500 flex justify-between font-bold px-2">
-                      <span>AKURASI: 3.60</span>
-                      <span>+</span>
-                      <span>PRESENTASI: 4.85</span>
-                    </div>
-                    <div className="text-2xl font-black text-[#C8102E] mt-1">= 8.450</div>
-                  </div>
-
-                  <div className="flex items-center justify-end gap-2">
-                    <Link href="/juri">
-                      <Button variant="outline" size="sm" className="font-bold">
-                        Lihat Stasiun
-                      </Button>
-                    </Link>
-                    <Button variant="default" size="sm" className="font-bold bg-[#C8102E]" onClick={() => setAlertMessage('Atlet berikutnya telah dipanggil ke tatami Arena A.')}>
-                      Panggil Atlet Berikutnya
-                    </Button>
-                  </div>
-                </div>
-
-                {/* Arena B */}
-                <div className="bg-gray-50 p-5 rounded-2xl border border-gray-200 grid grid-cols-1 md:grid-cols-4 gap-4 items-center">
-                  <div className="flex items-center gap-4 md:col-span-2">
-                    <div className="w-12 h-12 rounded-2xl bg-gray-700 text-white flex items-center justify-center font-black text-lg shadow-md flex-shrink-0">
-                      B
-                    </div>
-                    <div>
-                      <div className="flex items-center gap-2">
-                        <Badge variant="secondary" className="text-[10px] font-bold">PARTAI #38</Badge>
-                        <span className="text-xs font-bold text-gray-700">Junior Putri Individual</span>
-                        <Badge variant="warning" className="text-[10px]">MENUNGGU SINYAL JURI</Badge>
+                    <Badge variant={currentArenaMatch.status === 'aktif' ? 'default' : 'secondary'} className="text-xs">
+                      STATUS: {currentArenaMatch.status.toUpperCase()}
+                    </Badge>
+                  </CardHeader>
+                  <CardContent className="space-y-4">
+                    <div className="bg-gray-50 p-4 rounded-xl border border-gray-200 flex flex-wrap items-center justify-between gap-4">
+                      <div>
+                        <h4 className="text-xl font-black text-gray-900">{currentArenaMatch.athlete?.name}</h4>
+                        {currentArenaMatch.athlete?.athlete2_name && (
+                          <p className="text-sm font-bold text-rose-700">& {currentArenaMatch.athlete.athlete2_name} (Pair)</p>
+                        )}
+                        <p className="text-xs text-gray-500 font-semibold mt-0.5">
+                          {currentArenaMatch.athlete?.contingent} • {currentArenaMatch.round.toUpperCase()} ({currentArenaMatch.level.toUpperCase()})
+                        </p>
                       </div>
-                      <h4 className="text-lg font-black text-gray-900 mt-1">Siti Nurhaliza <span className="text-xs font-normal text-gray-500">• Pengcab Jawa Barat</span></h4>
-                      <p className="text-xs text-[#C8102E] font-bold">Wajib Poomsae: Keumgang (Poomsae 10)</p>
-                    </div>
-                  </div>
 
-                  <div className="text-xs text-gray-600 bg-white p-3 rounded-xl border border-gray-200 italic">
-                    Atlet telah di tatami, wasit tengah menyiapkan kesiapan 5 juri sudut.
-                  </div>
-
-                  <div className="flex items-center justify-end">
-                    <Button variant="default" size="sm" className="font-bold bg-emerald-600 hover:bg-emerald-700" onClick={() => setAlertMessage('Waktu tampil Arena B telah dimulai!')}>
-                      <Play className="h-4 w-4 mr-1" /> Mulai Waktu
-                    </Button>
-                  </div>
-                </div>
-              </CardContent>
-            </Card>
-
-            {/* Bottom Row: Verifikasi Cepat & Status Wasit */}
-            <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-              {/* Verifikasi Cepat */}
-              <Card>
-                <CardHeader className="flex flex-row items-center justify-between pb-3">
-                  <div>
-                    <CardTitle className="text-base flex items-center gap-2">
-                      <Shield className="h-4 w-4 text-[#C8102E]" />
-                      Verifikasi Cepat Atlet & Dokumen
-                    </CardTitle>
-                    <CardDescription>{athletes.filter(a => a.verification_status === 'menunggu').length} Atlet Menunggu Pemeriksaan Berkas</CardDescription>
-                  </div>
-                  <button onClick={() => setActiveTab('verifikasi')} className="text-xs font-bold text-[#C8102E] hover:underline cursor-pointer">
-                    Lihat Semua ({athletes.length})
-                  </button>
-                </CardHeader>
-                <CardContent className="space-y-3">
-                  {athletes.slice(0, 3).map((a) => (
-                    <div key={a.id} className="p-3 bg-gray-50 rounded-xl border border-gray-200 flex items-center justify-between">
-                      <div className="flex items-center gap-3">
-                        <div className="w-10 h-10 rounded-full bg-[#C8102E] text-white flex items-center justify-center font-bold text-xs">
-                          {a.initials}
-                        </div>
-                        <div>
-                          <p className="font-black text-sm text-gray-900">{a.name}</p>
-                          <p className="text-xs text-gray-500">{a.dan_level} • {a.contingent}</p>
+                      <div className="text-right">
+                        <span className="text-[10px] text-gray-400 font-bold uppercase">Skor Saat Ini</span>
+                        <div className="text-3xl font-mono font-black text-[#C8102E]">
+                          {currentArenaMatch.final_score !== null && currentArenaMatch.final_score !== undefined
+                            ? currentArenaMatch.final_score.toFixed(3)
+                            : (currentArenaMatch.speed_kick_total_points ? `${currentArenaMatch.speed_kick_total_points} Pts` : '-')}
                         </div>
                       </div>
-                      <div className="flex gap-1.5">
-                        <Button size="sm" variant="outline" className="h-8 px-2 text-xs" onClick={() => handleVerifyAthlete(a.id, 'ditolak')}>Tolak</Button>
-                        <Button size="sm" variant="default" className="h-8 px-2.5 text-xs bg-emerald-600 hover:bg-emerald-700" onClick={() => handleVerifyAthlete(a.id, 'terverifikasi')}>Setujui</Button>
-                      </div>
                     </div>
-                  ))}
-                </CardContent>
-              </Card>
 
-              {/* Status Wasit Arena A */}
-              <Card>
-                <CardHeader className="flex flex-row items-center justify-between pb-3">
-                  <div>
-                    <CardTitle className="text-base flex items-center gap-2">
-                      <Users className="h-4 w-4 text-[#C8102E]" />
-                      Status Wasit: Arena A
-                    </CardTitle>
-                    <CardDescription>5 Stasiun Penilai Aktif Real-time</CardDescription>
-                  </div>
-                  <Badge variant="success" className="text-xs">100% SIAP</Badge>
-                </CardHeader>
-                <CardContent className="space-y-2.5">
-                  {judges.slice(0, 5).map((j, idx) => (
-                    <div key={j.id} className="p-2.5 bg-gray-50 rounded-xl border border-gray-200 flex items-center justify-between text-xs">
-                      <div className="flex items-center gap-2">
-                        <span className="font-bold bg-white px-2 py-0.5 rounded border text-gray-800">J{idx + 1}</span>
-                        <span className="font-bold text-gray-900">{j.name}</span>
-                        <span className="text-gray-400">({j.organization})</span>
-                      </div>
-                      <span className="text-emerald-600 font-semibold flex items-center gap-1">
-                        <span className="w-2 h-2 rounded-full bg-emerald-500" /> 14ms
+                    {/* YouTube Video Preview */}
+                    <div>
+                      <span className="text-xs font-bold text-gray-700 flex items-center gap-1.5 mb-1.5">
+                        <Video className="w-3.5 h-3.5 text-red-600" /> Video Rekaman YouTube
                       </span>
+                      <div className="w-full h-56 bg-black rounded-xl overflow-hidden flex items-center justify-center">
+                        {currentArenaMatch.athlete?.youtube_url ? (
+                          <iframe 
+                            className="w-full h-full"
+                            src={getYouTubeEmbedUrl(currentArenaMatch.athlete.youtube_url) || ''}
+                            title="Video Atlet"
+                            allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture" 
+                            allowFullScreen
+                          />
+                        ) : (
+                          <span className="text-gray-400 text-xs">Link YouTube belum tersedia</span>
+                        )}
+                      </div>
                     </div>
-                  ))}
-                </CardContent>
-              </Card>
-            </div>
+                  </CardContent>
+                </Card>
+
+                {/* Arena Match Queue */}
+                <Card>
+                  <CardHeader className="pb-3">
+                    <CardTitle className="text-sm">Antrean Lapangan {selectedArenaConsole}</CardTitle>
+                    <CardDescription className="text-xs">Klik untuk mengaktifkan partai</CardDescription>
+                  </CardHeader>
+                  <CardContent className="space-y-2 max-h-[380px] overflow-y-auto">
+                    {matches.filter(m => m.arena_code === selectedArenaConsole).map(m => (
+                      <div
+                        key={m.id}
+                        onClick={() => dbService.setActiveMatch(m.id, selectedArenaConsole)}
+                        className={`p-3 rounded-xl border text-xs transition-all cursor-pointer ${
+                          m.is_current 
+                            ? 'bg-red-50/80 border-[#C8102E] shadow-xs' 
+                            : 'bg-white border-gray-200 hover:bg-gray-50'
+                        }`}
+                      >
+                        <div className="flex justify-between items-center mb-1">
+                          <span className="font-bold bg-gray-100 px-1.5 py-0.5 rounded text-[10px]">#{m.match_number}</span>
+                          <Badge variant={m.status === 'selesai' ? 'success' : m.status === 'aktif' ? 'default' : 'secondary'} className="text-[9px]">
+                            {m.status}
+                          </Badge>
+                        </div>
+                        <p className="font-black text-gray-900">{m.athlete?.name}</p>
+                        <p className="text-[10px] text-gray-500">{m.category_name}</p>
+                      </div>
+                    ))}
+                  </CardContent>
+                </Card>
+              </div>
+            ) : (
+              <div className="p-12 text-center text-gray-400 text-xs">
+                Tidak ada data partai di Lapangan {selectedArenaConsole}.
+              </div>
+            )}
           </div>
         )}
 
         {/* ============================================================ */}
-        {/* 2. MANAJEMEN DATABASE WASIT/JURI */}
+        {/* TAB 2: PENGATURAN SISTEM (SETTINGS) */}
         {/* ============================================================ */}
-        {activeTab === 'wasit' && (
-          <Card>
-            <CardHeader className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
-              <div>
-                <CardTitle>Manajemen Database Wasit & Juri</CardTitle>
-                <CardDescription>Data seluruh wasit nasional yang bertugas, kode akses, PIN, dan posisi sudut</CardDescription>
-              </div>
-              <div className="flex gap-2">
-                <Input 
-                  placeholder="Cari nama wasit / kode..." 
-                  value={searchJudge} 
-                  onChange={(e) => setSearchJudge(e.target.value)}
-                  className="w-64 text-xs"
+        {activeTab === 'settings' && (
+          <Card className="border-t-4 border-t-[#C8102E]">
+            <CardHeader>
+              <CardTitle className="text-base flex items-center gap-2">
+                <Settings className="w-5 h-5 text-[#C8102E]" />
+                Pengaturan Konfigurasi Kejuaraan & Aturan Pertandingan
+              </CardTitle>
+              <CardDescription className="text-xs">
+                Ubah parameter turnamen, konfigurasi juri 3+1 atau 5+1, jumlah gerakan, nama lapangan, dan poin speed kick.
+              </CardDescription>
+            </CardHeader>
+            <CardContent>
+              <form onSubmit={handleSaveSettings} className="space-y-6">
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                  <div>
+                    <label className="block text-xs font-bold text-gray-700 mb-1">Nama Resmi Kejuaraan</label>
+                    <Input 
+                      value={settingsForm.name} 
+                      onChange={e => setSettingsForm({ ...settingsForm, name: e.target.value })} 
+                      required 
+                      className="text-xs"
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-xs font-bold text-gray-700 mb-1">Lokasi Pertandingan / Venue</label>
+                    <Input 
+                      value={settingsForm.location || ''} 
+                      onChange={e => setSettingsForm({ ...settingsForm, location: e.target.value })} 
+                      className="text-xs"
+                    />
+                  </div>
+                </div>
+
+                <div className="grid grid-cols-1 sm:grid-cols-3 gap-4 p-4 bg-gray-50 rounded-2xl border border-gray-200">
+                  <div>
+                    <label className="block text-xs font-bold text-gray-700 mb-1">Konfigurasi Juri Per Sesi</label>
+                    <select
+                      value={settingsForm.judges_per_session}
+                      onChange={e => setSettingsForm({ ...settingsForm, judges_per_session: parseInt(e.target.value) })}
+                      className="w-full h-10 rounded-lg border border-gray-200 px-3 bg-white text-xs font-bold"
+                    >
+                      <option value={3}>3 Juri (+1 Cadangan) [Default Standar]</option>
+                      <option value={5}>5 Juri (+1 Cadangan) [Cut-Off High/Low]</option>
+                    </select>
+                    <p className="text-[11px] text-gray-500 mt-1">Default resmi WT: 3+1 juri.</p>
+                  </div>
+
+                  <div>
+                    <label className="block text-xs font-bold text-gray-700 mb-1">Jumlah Gerakan Poomsae</label>
+                    <select
+                      value={settingsForm.forms_count}
+                      onChange={e => setSettingsForm({ ...settingsForm, forms_count: parseInt(e.target.value) })}
+                      className="w-full h-10 rounded-lg border border-gray-200 px-3 bg-white text-xs font-bold"
+                    >
+                      <option value={1}>1 Gerakan (Nilai Tunggal)</option>
+                      <option value={2}>2 Gerakan (Rata-rata 2 Form) [Default]</option>
+                    </select>
+                    <p className="text-[11px] text-gray-500 mt-1">Penilaian babak resmi.</p>
+                  </div>
+
+                  <div>
+                    <label className="block text-xs font-bold text-gray-700 mb-1">Jumlah Lapangan Aktif</label>
+                    <select
+                      value={settingsForm.arena_count}
+                      onChange={e => setSettingsForm({ ...settingsForm, arena_count: parseInt(e.target.value) })}
+                      className="w-full h-10 rounded-lg border border-gray-200 px-3 bg-white text-xs font-bold"
+                    >
+                      <option value={2}>2 Lapangan (A, B)</option>
+                      <option value={3}>3 Lapangan (A, B, C) [Default]</option>
+                      <option value={4}>4 Lapangan (A, B, C, D)</option>
+                    </select>
+                    <p className="text-[11px] text-gray-500 mt-1">Jumlah arena tatami.</p>
+                  </div>
+                </div>
+
+                {/* Speed Kick Parameters */}
+                <div className="p-4 bg-amber-50/50 rounded-2xl border border-amber-200 space-y-3">
+                  <h4 className="text-xs font-black text-amber-900 uppercase">Parameter Poin Speed Kicking On Target:</h4>
+                  <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
+                    <div>
+                      <label className="block text-xs font-semibold text-gray-700 mb-1">Poin Tendangan Badan (Momtong)</label>
+                      <Input 
+                        type="number" 
+                        step="0.5" 
+                        value={settingsForm.speed_kick_body_point} 
+                        onChange={e => setSettingsForm({ ...settingsForm, speed_kick_body_point: parseFloat(e.target.value) })} 
+                        className="text-xs"
+                      />
+                    </div>
+                    <div>
+                      <label className="block text-xs font-semibold text-gray-700 mb-1">Poin Tendangan Kepala (Eolgul)</label>
+                      <Input 
+                        type="number" 
+                        step="0.5" 
+                        value={settingsForm.speed_kick_head_point} 
+                        onChange={e => setSettingsForm({ ...settingsForm, speed_kick_head_point: parseFloat(e.target.value) })} 
+                        className="text-xs"
+                      />
+                    </div>
+                    <div>
+                      <label className="block text-xs font-semibold text-gray-700 mb-1">Poin Kepala Putar (Dwi Chagi)</label>
+                      <Input 
+                        type="number" 
+                        step="0.5" 
+                        value={settingsForm.speed_kick_spin_head_point} 
+                        onChange={e => setSettingsForm({ ...settingsForm, speed_kick_spin_head_point: parseFloat(e.target.value) })} 
+                        className="text-xs"
+                      />
+                    </div>
+                  </div>
+                </div>
+
+                <div className="flex justify-end gap-3 pt-2">
+                  <Button type="submit" className="text-xs font-bold bg-[#C8102E] hover:bg-[#9B0C23]">
+                    <Save className="w-4 h-4 mr-1.5" /> Simpan Perubahan Pengaturan
+                  </Button>
+                </div>
+              </form>
+            </CardContent>
+          </Card>
+        )}
+
+        {/* ============================================================ */}
+        {/* TAB 3: DATA & VERIFIKASI ATLET */}
+        {/* ============================================================ */}
+        {activeTab === 'verifikasi' && (
+          <div className="space-y-6">
+            {/* Header Toolbar */}
+            <div className="flex flex-wrap items-center justify-between gap-3 bg-white p-4 rounded-2xl border border-gray-200">
+              <div className="relative flex-1 max-w-sm">
+                <Input
+                  icon={<Search className="w-4 h-4 text-gray-400" />}
+                  placeholder="Cari atlet, partner pair, kontingen..."
+                  value={searchAthlete}
+                  onChange={e => setSearchAthlete(e.target.value)}
+                  className="text-xs h-9"
                 />
               </div>
-            </CardHeader>
-            <CardContent className="space-y-6">
-              {/* Add Judge Form */}
-              <div className="bg-red-50/40 p-4 rounded-2xl border border-red-100 space-y-3">
-                <h4 className="font-bold text-sm text-[#C8102E]">Tambah Wasit / Juri Baru</h4>
-                <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-5 gap-3">
-                  <Input placeholder="Nama Wasit" value={newJudge.name} onChange={(e) => setNewJudge({ ...newJudge, name: e.target.value })} />
-                  <Input placeholder="Kode Juri (J-2025-006)" value={newJudge.judge_code} onChange={(e) => setNewJudge({ ...newJudge, judge_code: e.target.value })} />
-                  <Input placeholder="PIN (6 Digit)" value={newJudge.pin} onChange={(e) => setNewJudge({ ...newJudge, pin: e.target.value })} />
-                  <Input placeholder="Organisasi / Pengprov" value={newJudge.organization} onChange={(e) => setNewJudge({ ...newJudge, organization: e.target.value })} />
-                  <Button onClick={handleAddJudge} className="font-bold bg-[#C8102E]"><Plus className="h-4 w-4" /> Simpan Wasit</Button>
-                </div>
-              </div>
 
-              {/* Judges Table */}
-              <div className="border border-gray-200 rounded-2xl overflow-hidden">
-                <table className="w-full text-sm text-left">
-                  <thead className="bg-gray-100 text-gray-700 uppercase font-bold text-xs">
-                    <tr>
-                      <th className="px-4 py-3">Nama Wasit</th>
-                      <th className="px-4 py-3">Kode Juri</th>
-                      <th className="px-4 py-3">PIN</th>
-                      <th className="px-4 py-3">Pangkat / Tingkat</th>
-                      <th className="px-4 py-3">Pengprov / Pengcab</th>
-                      <th className="px-4 py-3">Status Tablet</th>
+              <div className="flex items-center gap-2">
+                <Button 
+                  variant="outline" 
+                  size="sm" 
+                  onClick={() => setIsImportOpen(true)}
+                  className="text-xs font-bold gap-1.5 border-blue-300 text-blue-700 hover:bg-blue-50"
+                >
+                  <Upload className="w-4 h-4 text-blue-600" /> Import Atlet dari Excel / CSV
+                </Button>
+              </div>
+            </div>
+
+            {/* Athlete Registration Form */}
+            <Card>
+              <CardHeader className="pb-3">
+                <CardTitle className="text-sm">Registrasi Atlet Baru (Individu / Pair 2 Atlet)</CardTitle>
+                <CardDescription className="text-xs">
+                  Dukung kategori Prestasi, Festival (Pemula), Speed Kicking, serta format Pair (1 tim = 2 nama atlet).
+                </CardDescription>
+              </CardHeader>
+              <CardContent>
+                <form onSubmit={handleCreateAthlete} className="grid grid-cols-1 sm:grid-cols-3 md:grid-cols-4 gap-3 text-xs">
+                  <div className="sm:col-span-2">
+                    <label className="block font-bold text-gray-700 mb-1">Nama Atlet 1</label>
+                    <Input 
+                      placeholder="Contoh: Ahmad Zaki Kurniawan" 
+                      value={newAthlete.name} 
+                      onChange={e => setNewAthlete({ ...newAthlete, name: e.target.value })} 
+                      required 
+                      className="text-xs h-9"
+                    />
+                  </div>
+
+                  <div>
+                    <label className="block font-bold text-gray-700 mb-1">Partisipasi</label>
+                    <select
+                      value={newAthlete.participation_type}
+                      onChange={e => setNewAthlete({ ...newAthlete, participation_type: e.target.value as any })}
+                      className="w-full h-9 rounded-lg border border-gray-200 px-2.5 bg-white text-xs font-bold"
+                    >
+                      <option value="individu">Individu (1 Orang)</option>
+                      <option value="pair">Pair (Berpasangan 2 Orang)</option>
+                    </select>
+                  </div>
+
+                  {newAthlete.participation_type === 'pair' && (
+                    <div className="sm:col-span-2">
+                      <label className="block font-bold text-rose-700 mb-1">Nama Atlet 2 (Partner Pair)</label>
+                      <Input 
+                        placeholder="Contoh: Siti Aisyah" 
+                        value={newAthlete.athlete2_name} 
+                        onChange={e => setNewAthlete({ ...newAthlete, athlete2_name: e.target.value })} 
+                        required 
+                        className="text-xs h-9 border-rose-200 bg-rose-50/30"
+                      />
+                    </div>
+                  )}
+
+                  <div>
+                    <label className="block font-bold text-gray-700 mb-1">Kategori</label>
+                    <select
+                      value={newAthlete.category_type}
+                      onChange={e => setNewAthlete({ ...newAthlete, category_type: e.target.value as any })}
+                      className="w-full h-9 rounded-lg border border-gray-200 px-2.5 bg-white text-xs font-bold"
+                    >
+                      <option value="prestasi">Prestasi</option>
+                      <option value="festival">Festival</option>
+                      <option value="speed_kick">Speed Kicking</option>
+                    </select>
+                  </div>
+
+                  <div>
+                    <label className="block font-bold text-gray-700 mb-1">Tingkatan Atlet</label>
+                    <select
+                      value={newAthlete.level}
+                      onChange={e => setNewAthlete({ ...newAthlete, level: e.target.value as any })}
+                      className="w-full h-9 rounded-lg border border-gray-200 px-2.5 bg-white text-xs font-bold"
+                    >
+                      <option value="prestasi">Prestasi</option>
+                      <option value="pemula">Pemula</option>
+                    </select>
+                  </div>
+
+                  <div>
+                    <label className="block font-bold text-gray-700 mb-1">Kontingen / Dojang</label>
+                    <Input 
+                      placeholder="Pengprov DKI / Dojang Garuda" 
+                      value={newAthlete.contingent} 
+                      onChange={e => setNewAthlete({ ...newAthlete, contingent: e.target.value })} 
+                      className="text-xs h-9"
+                    />
+                  </div>
+
+                  <div>
+                    <label className="block font-bold text-gray-700 mb-1">Provinsi</label>
+                    <Input 
+                      placeholder="DKI Jakarta" 
+                      value={newAthlete.province} 
+                      onChange={e => setNewAthlete({ ...newAthlete, province: e.target.value })} 
+                      className="text-xs h-9"
+                    />
+                  </div>
+
+                  <div className="sm:col-span-2">
+                    <label className="block font-bold text-gray-700 mb-1">Tautan YouTube Peserta</label>
+                    <Input 
+                      placeholder="https://youtube.com/watch?v=..." 
+                      value={newAthlete.youtube_url} 
+                      onChange={e => setNewAthlete({ ...newAthlete, youtube_url: e.target.value })} 
+                      className="text-xs h-9"
+                    />
+                  </div>
+
+                  <div className="flex items-end">
+                    <Button type="submit" size="sm" className="w-full h-9 text-xs font-bold bg-[#C8102E] hover:bg-[#9B0C23]">
+                      <Plus className="w-4 h-4 mr-1" /> Daftarkan Atlet
+                    </Button>
+                  </div>
+                </form>
+              </CardContent>
+            </Card>
+
+            {/* Athletes Table */}
+            <Card>
+              <div className="overflow-x-auto">
+                <table className="w-full text-left text-xs border-collapse">
+                  <thead>
+                    <tr className="border-b border-gray-200 bg-gray-50 text-gray-600 font-bold uppercase text-[10px]">
+                      <th className="py-3 px-3">#</th>
+                      <th className="py-3 px-3">Nama Atlet</th>
+                      <th className="py-3 px-3">Kategori</th>
+                      <th className="py-3 px-3">Tingkatan</th>
+                      <th className="py-3 px-3">Kontingen</th>
+                      <th className="py-3 px-3">Tautan YouTube</th>
+                      <th className="py-3 px-3 text-center">Status</th>
+                      <th className="py-3 px-3 text-center">Aksi Verifikasi</th>
+                      <th className="py-3 px-3 text-center">Antrean Lapangan</th>
                     </tr>
                   </thead>
-                  <tbody className="divide-y divide-gray-200">
-                    {filteredJudges.map((j) => (
+                  <tbody className="divide-y divide-gray-100">
+                    {filteredAthletes.map((a, idx) => (
+                      <tr key={a.id} className="hover:bg-gray-50/70">
+                        <td className="py-3 px-3 font-semibold text-gray-500">{idx + 1}</td>
+                        <td className="py-3 px-3">
+                          <div className="font-bold text-gray-900">{a.name}</div>
+                          {a.athlete2_name && (
+                            <div className="text-[11px] font-semibold text-rose-600">
+                              & {a.athlete2_name} <span className="text-[9px] bg-rose-50 px-1 rounded">(Pair)</span>
+                            </div>
+                          )}
+                        </td>
+                        <td className="py-3 px-3">
+                          <Badge variant="outline" className="text-[10px] uppercase">{a.category_type}</Badge>
+                        </td>
+                        <td className="py-3 px-3">
+                          <Badge variant="secondary" className="text-[10px] uppercase">{a.level}</Badge>
+                        </td>
+                        <td className="py-3 px-3 text-gray-600">{a.contingent} ({a.province})</td>
+                        <td className="py-3 px-3">
+                          <div className="flex items-center gap-1.5">
+                            <Input 
+                              defaultValue={a.youtube_url || ''} 
+                              onBlur={e => {
+                                if (e.target.value !== a.youtube_url) {
+                                  handleUpdateYouTubeUrl(a.id, e.target.value);
+                                }
+                              }}
+                              placeholder="Tempel link YouTube..."
+                              className="text-[11px] h-7 w-48 font-mono"
+                            />
+                            {a.youtube_url && (
+                              <a href={a.youtube_url} target="_blank" rel="noreferrer" className="text-red-600 hover:text-red-800">
+                                <ExternalLink className="w-3.5 h-3.5" />
+                              </a>
+                            )}
+                          </div>
+                        </td>
+                        <td className="py-3 px-3 text-center">
+                          <Badge variant={a.verification_status === 'terverifikasi' ? 'success' : a.verification_status === 'ditolak' ? 'destructive' : 'warning'} className="text-[10px]">
+                            {a.verification_status}
+                          </Badge>
+                        </td>
+                        <td className="py-3 px-3 text-center">
+                          <div className="flex items-center justify-center gap-1">
+                            <Button 
+                              size="sm" 
+                              variant="outline" 
+                              onClick={() => handleVerifyAthlete(a.id, 'terverifikasi')}
+                              className="h-7 text-[10px] text-emerald-700 hover:bg-emerald-50 border-emerald-300"
+                            >
+                              Setujui
+                            </Button>
+                            <Button 
+                              size="sm" 
+                              variant="outline" 
+                              onClick={() => handleVerifyAthlete(a.id, 'ditolak')}
+                              className="h-7 text-[10px] text-rose-700 hover:bg-rose-50 border-rose-300"
+                            >
+                              Tolak
+                            </Button>
+                          </div>
+                        </td>
+                        <td className="py-3 px-3 text-center">
+                          <div className="flex items-center justify-center gap-1.5">
+                            <select
+                              value={selectedQueueArena[a.id] || 'A'}
+                              onChange={(e) => setSelectedQueueArena({ ...selectedQueueArena, [a.id]: e.target.value as any })}
+                              className="h-7 text-[11px] font-bold rounded border border-gray-200 px-1 bg-white"
+                            >
+                              <option value="A">Lap A</option>
+                              <option value="B">Lap B</option>
+                              <option value="C">Lap C</option>
+                            </select>
+                            <Button
+                              size="sm"
+                              disabled={a.verification_status === 'ditolak'}
+                              onClick={() => handleQueueAthlete(a, selectedQueueArena[a.id] || 'A')}
+                              className="h-7 text-[10px] font-bold bg-[#C8102E] hover:bg-[#9B0C23] text-white"
+                            >
+                              + Antrekan
+                            </Button>
+                          </div>
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            </Card>
+          </div>
+        )}
+
+        {/* ============================================================ */}
+        {/* TAB 4: MASTER WASIT & USER */}
+        {/* ============================================================ */}
+        {activeTab === 'wasit' && (
+          <div className="space-y-6">
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+              {/* Add Judge Form */}
+              <Card>
+                <CardHeader className="pb-3">
+                  <CardTitle className="text-sm">Tambah Master Juri Baru</CardTitle>
+                </CardHeader>
+                <CardContent>
+                  <form onSubmit={handleCreateJudge} className="space-y-3 text-xs">
+                    <div>
+                      <label className="block font-bold text-gray-700 mb-1">Nama Lengkap Juri</label>
+                      <Input 
+                        placeholder="Contoh: Sabeum Eko Prasetyo" 
+                        value={newJudge.name} 
+                        onChange={e => setNewJudge({ ...newJudge, name: e.target.value })} 
+                        required 
+                        className="text-xs h-9"
+                      />
+                    </div>
+                    <div className="grid grid-cols-2 gap-3">
+                      <div>
+                        <label className="block font-bold text-gray-700 mb-1">Kode Juri</label>
+                        <Input 
+                          placeholder="J-2025-007" 
+                          value={newJudge.judge_code} 
+                          onChange={e => setNewJudge({ ...newJudge, judge_code: e.target.value })} 
+                          required 
+                          className="text-xs h-9 font-mono"
+                        />
+                      </div>
+                      <div>
+                        <label className="block font-bold text-gray-700 mb-1">PIN 6 Digit</label>
+                        <Input 
+                          type="password"
+                          maxLength={6}
+                          placeholder="123456" 
+                          value={newJudge.pin} 
+                          onChange={e => setNewJudge({ ...newJudge, pin: e.target.value })} 
+                          required 
+                          className="text-xs h-9 font-mono"
+                        />
+                      </div>
+                    </div>
+                    <div className="grid grid-cols-2 gap-3">
+                      <div>
+                        <label className="block font-bold text-gray-700 mb-1">Penugasan Arena</label>
+                        <select
+                          value={newJudge.assigned_arena}
+                          onChange={e => setNewJudge({ ...newJudge, assigned_arena: e.target.value })}
+                          className="w-full h-9 rounded-lg border border-gray-200 px-2.5 bg-white text-xs font-bold"
+                        >
+                          <option value="A">Lapangan A</option>
+                          <option value="B">Lapangan B</option>
+                          <option value="C">Lapangan C</option>
+                        </select>
+                      </div>
+                      <div>
+                        <label className="block font-bold text-gray-700 mb-1">Posisi Meja</label>
+                        <select
+                          value={newJudge.position}
+                          onChange={e => setNewJudge({ ...newJudge, position: e.target.value as any })}
+                          className="w-full h-9 rounded-lg border border-gray-200 px-2.5 bg-white text-xs font-bold"
+                        >
+                          <option value="J1">Juri 1 (J1)</option>
+                          <option value="J2">Juri 2 (J2)</option>
+                          <option value="J3">Juri 3 (J3)</option>
+                          <option value="J4">Juri 4 (J4)</option>
+                          <option value="J5">Juri 5 (J5)</option>
+                          <option value="cadangan">Juri Cadangan</option>
+                        </select>
+                      </div>
+                    </div>
+                    <Button type="submit" size="sm" className="w-full h-9 text-xs font-bold bg-[#C8102E] hover:bg-[#9B0C23]">
+                      <Plus className="w-4 h-4 mr-1" /> Simpan Juri
+                    </Button>
+                  </form>
+                </CardContent>
+              </Card>
+
+              {/* Add Master User Form */}
+              <Card>
+                <CardHeader className="pb-3">
+                  <CardTitle className="text-sm">Tambah Master Petugas / User</CardTitle>
+                </CardHeader>
+                <CardContent>
+                  <form onSubmit={handleCreateUser} className="space-y-3 text-xs">
+                    <div>
+                      <label className="block font-bold text-gray-700 mb-1">Nama Petugas</label>
+                      <Input 
+                        placeholder="Contoh: Operator Arena B" 
+                        value={newUser.name} 
+                        onChange={e => setNewUser({ ...newUser, name: e.target.value })} 
+                        required 
+                        className="text-xs h-9"
+                      />
+                    </div>
+                    <div className="grid grid-cols-2 gap-3">
+                      <div>
+                        <label className="block font-bold text-gray-700 mb-1">Username</label>
+                        <Input 
+                          placeholder="operator_b" 
+                          value={newUser.username} 
+                          onChange={e => setNewUser({ ...newUser, username: e.target.value })} 
+                          required 
+                          className="text-xs h-9"
+                        />
+                      </div>
+                      <div>
+                        <label className="block font-bold text-gray-700 mb-1">PIN / Password</label>
+                        <Input 
+                          type="password"
+                          placeholder="op1234" 
+                          value={newUser.pin} 
+                          onChange={e => setNewUser({ ...newUser, pin: e.target.value })} 
+                          required 
+                          className="text-xs h-9"
+                        />
+                      </div>
+                    </div>
+                    <div className="grid grid-cols-2 gap-3">
+                      <div>
+                        <label className="block font-bold text-gray-700 mb-1">Hak Akses (Role)</label>
+                        <select
+                          value={newUser.role}
+                          onChange={e => setNewUser({ ...newUser, role: e.target.value as any })}
+                          className="w-full h-9 rounded-lg border border-gray-200 px-2.5 bg-white text-xs font-bold"
+                        >
+                          <option value="operator">Operator Lapangan</option>
+                          <option value="admin">Admin Kejuaraan</option>
+                          <option value="media">Display Media / Proyektor</option>
+                        </select>
+                      </div>
+                      <div>
+                        <label className="block font-bold text-gray-700 mb-1">Arena Penugasan</label>
+                        <select
+                          value={newUser.assigned_arena}
+                          onChange={e => setNewUser({ ...newUser, assigned_arena: e.target.value })}
+                          className="w-full h-9 rounded-lg border border-gray-200 px-2.5 bg-white text-xs font-bold"
+                        >
+                          <option value="A">Lapangan A</option>
+                          <option value="B">Lapangan B</option>
+                          <option value="C">Lapangan C</option>
+                        </select>
+                      </div>
+                    </div>
+                    <Button type="submit" size="sm" className="w-full h-9 text-xs font-bold bg-gray-900 hover:bg-black">
+                      <Plus className="w-4 h-4 mr-1" /> Simpan User
+                    </Button>
+                  </form>
+                </CardContent>
+              </Card>
+            </div>
+
+            {/* Judges List Table */}
+            <Card>
+              <CardHeader className="pb-2">
+                <CardTitle className="text-sm">Daftar Wasit & Juri Terdaftar</CardTitle>
+              </CardHeader>
+              <div className="overflow-x-auto">
+                <table className="w-full text-left text-xs border-collapse">
+                  <thead>
+                    <tr className="border-b border-gray-200 bg-gray-50 text-gray-600 font-bold uppercase text-[10px]">
+                      <th className="py-2.5 px-3">Kode</th>
+                      <th className="py-2.5 px-3">Nama Wasit</th>
+                      <th className="py-2.5 px-3">Sertifikasi & Lembaga</th>
+                      <th className="py-2.5 px-3">Arena</th>
+                      <th className="py-2.5 px-3">Posisi</th>
+                      <th className="py-2.5 px-3 text-center">Status</th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-gray-100">
+                    {filteredJudges.map(j => (
                       <tr key={j.id} className="hover:bg-gray-50">
-                        <td className="px-4 py-3 font-bold text-gray-900">{j.name}</td>
-                        <td className="px-4 py-3 font-mono font-bold text-[#C8102E]">{j.judge_code}</td>
-                        <td className="px-4 py-3 font-mono">{j.pin}</td>
-                        <td className="px-4 py-3 text-gray-600">{j.rank}</td>
-                        <td className="px-4 py-3 text-gray-600">{j.organization}</td>
-                        <td className="px-4 py-3">
-                          <span className="inline-flex items-center gap-1.5 text-xs text-emerald-700 bg-emerald-50 border border-emerald-200 px-2.5 py-1 rounded-full font-bold">
-                            <span className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse" /> Online
+                        <td className="py-2.5 px-3 font-mono font-bold text-gray-900">{j.judge_code}</td>
+                        <td className="py-2.5 px-3 font-bold text-gray-900">{j.name}</td>
+                        <td className="py-2.5 px-3 text-gray-600">{j.rank} • {j.organization}</td>
+                        <td className="py-2.5 px-3">Lapangan {j.assigned_arena}</td>
+                        <td className="py-2.5 px-3">
+                          <Badge variant={j.is_backup ? 'warning' : 'default'} className="text-[10px]">
+                            {j.position}
+                          </Badge>
+                        </td>
+                        <td className="py-2.5 px-3 text-center">
+                          <span className="inline-flex items-center gap-1 text-[10px] text-emerald-600 font-bold">
+                            <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-pulse" /> ONLINE
                           </span>
                         </td>
                       </tr>
@@ -526,285 +1121,273 @@ function AdminContent() {
                   </tbody>
                 </table>
               </div>
-            </CardContent>
-          </Card>
+            </Card>
+          </div>
         )}
 
         {/* ============================================================ */}
-        {/* 3. JADWAL & FORMAT GERAKAN */}
-        {/* ============================================================ */}
-        {activeTab === 'jadwal' && (
-          <Card>
-            <CardHeader>
-              <CardTitle>Jadwal Pertandingan & Format Poomsae Wajib</CardTitle>
-              <CardDescription>Pilihan bentuk poomsae resmi (Taegeuk 1-8, Koryo, Keumgang, Taebaek, dll.) per babak pertandingan</CardDescription>
-            </CardHeader>
-            <CardContent className="space-y-6">
-              <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
-                {forms.map((f) => (
-                  <div key={f.id} className="p-4 bg-gray-50 rounded-2xl border border-gray-200 hover:border-[#C8102E] transition-all">
-                    <div className="flex justify-between items-center mb-1">
-                      <span className="font-mono text-xs font-bold text-[#C8102E]">#{f.id}</span>
-                      <Badge variant="secondary" className="text-[10px]">{f.level}</Badge>
-                    </div>
-                    <h4 className="font-black text-base text-gray-900">{f.name}</h4>
-                    <p className="text-xs text-gray-500 mt-1">{f.desc}</p>
-                  </div>
-                ))}
-              </div>
-            </CardContent>
-          </Card>
-        )}
-
-        {/* ============================================================ */}
-        {/* 4. VERIFIKASI ATLET */}
-        {/* ============================================================ */}
-        {activeTab === 'verifikasi' && (
-          <Card>
-            <CardHeader className="flex flex-row items-center justify-between">
-              <div>
-                <CardTitle>Verifikasi Atlet & Dokumen Video YouTube</CardTitle>
-                <CardDescription>Hanya atlet yang terverifikasi yang akan otomatis diikutsertakan ke dalam bagan pertandingan</CardDescription>
-              </div>
-            </CardHeader>
-            <CardContent className="space-y-6">
-              {/* Add Athlete Form */}
-              <div className="bg-gray-50 p-4 rounded-2xl border border-gray-200 space-y-3">
-                <h4 className="font-bold text-sm text-gray-900">Input Data Atlet Manual</h4>
-                <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-4 gap-3">
-                  <Input placeholder="Nama Atlet" value={newAthlete.name} onChange={(e) => setNewAthlete({ ...newAthlete, name: e.target.value })} />
-                  <Input placeholder="Kontingen / Pengprov" value={newAthlete.contingent} onChange={(e) => setNewAthlete({ ...newAthlete, contingent: e.target.value })} />
-                  <Input placeholder="Tingkat Dan (Dan I, II, III)" value={newAthlete.dan_level} onChange={(e) => setNewAthlete({ ...newAthlete, dan_level: e.target.value })} />
-                  <Input placeholder="Link Video YouTube" value={newAthlete.youtube_url} onChange={(e) => setNewAthlete({ ...newAthlete, youtube_url: e.target.value })} />
-                </div>
-                <div className="flex justify-end">
-                  <Button onClick={handleAddAthlete} className="bg-[#C8102E] font-bold"><Plus className="h-4 w-4" /> Daftarkan Atlet</Button>
-                </div>
-              </div>
-
-              {/* Table */}
-              <div className="border border-gray-200 rounded-2xl overflow-hidden">
-                <table className="w-full text-sm text-left">
-                  <thead className="bg-gray-100 text-gray-700 uppercase font-bold text-xs">
-                    <tr>
-                      <th className="px-4 py-3">Nama Atlet</th>
-                      <th className="px-4 py-3">Kontingen</th>
-                      <th className="px-4 py-3">Dan Level</th>
-                      <th className="px-4 py-3">Video Gerakan</th>
-                      <th className="px-4 py-3">Status Verifikasi</th>
-                      <th className="px-4 py-3 text-right">Aksi</th>
-                    </tr>
-                  </thead>
-                  <tbody className="divide-y divide-gray-200">
-                    {athletes.map((a) => (
-                      <tr key={a.id} className="hover:bg-gray-50">
-                        <td className="px-4 py-3 font-bold text-gray-900">{a.name}</td>
-                        <td className="px-4 py-3 text-gray-600">{a.contingent}</td>
-                        <td className="px-4 py-3 text-gray-600">{a.dan_level}</td>
-                        <td className="px-4 py-3">
-                          <a href={a.youtube_url || '#'} target="_blank" rel="noreferrer" className="text-red-600 hover:underline flex items-center gap-1 font-bold text-xs">
-                            <Video className="h-3.5 w-3.5" /> Tonton YouTube
-                          </a>
-                        </td>
-                        <td className="px-4 py-3">
-                          <Badge variant={a.verification_status === 'terverifikasi' ? 'success' : a.verification_status === 'ditolak' ? 'destructive' : 'warning'}>
-                            {a.verification_status.toUpperCase()}
-                          </Badge>
-                        </td>
-                        <td className="px-4 py-3 text-right space-x-2">
-                          <Button size="sm" variant="success" className="h-8 px-2.5 text-xs font-bold" onClick={() => handleVerifyAthlete(a.id, 'terverifikasi')}>Setujui</Button>
-                          <Button size="sm" variant="destructive" className="h-8 px-2.5 text-xs font-bold" onClick={() => handleVerifyAthlete(a.id, 'ditolak')}>Tolak</Button>
-                        </td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
-              </div>
-            </CardContent>
-          </Card>
-        )}
-
-        {/* ============================================================ */}
-        {/* 5. KONFIGURASI CUT-OFF BRACKET */}
+        {/* TAB 5: BAGAN, CUT-OFF & JADWAL */}
         {/* ============================================================ */}
         {activeTab === 'bracket' && (
-          <Card>
-            <CardHeader>
-              <CardTitle>Konfigurasi Cut-Off & Bagan Eliminasi</CardTitle>
-              <CardDescription>Aturan kelolosan atlet per babak dan pembagian bagan kejuaraan</CardDescription>
-            </CardHeader>
-            <CardContent className="space-y-6">
-              <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-                <div className="p-5 bg-gray-50 rounded-2xl border border-gray-200 space-y-3">
-                  <Badge variant="default" className="bg-[#C8102E]">ATURAN CUT-OFF PRESTASI</Badge>
-                  <h4 className="text-lg font-black text-gray-900">Babak Penyisihan $\rightarrow$ Final 8 Besar</h4>
-                  <p className="text-xs text-gray-600 leading-relaxed">
-                    Jika jumlah peserta dalam 1 kategori &gt; 8 atlet, maka diselenggarakan babak penyisihan. Nilai diurutkan dari yang tertinggi, 8 atlet terbaik lolos ke babak Final.
-                  </p>
-                  <div className="pt-2">
-                    <label className="block text-xs font-bold text-gray-700 mb-1">Jumlah Lolos Final (Cut-off)</label>
-                    <Input defaultValue="8 Atlet (Perempat Final s/d Final)" disabled className="bg-white font-bold" />
+          <div className="space-y-6">
+            <Card className="border-t-4 border-t-amber-500">
+              <CardHeader>
+                <CardTitle className="text-base flex items-center gap-2">
+                  <GitBranch className="w-5 h-5 text-amber-500" />
+                  Manajemen Bagan Turnamen, Logika Cut-Off & Pengelompokan Pemula
+                </CardTitle>
+                <CardDescription className="text-xs">
+                  Sesuai spesifikasi WT: ≤8 atlet langsung babak final. &gt;8 atlet melalui penyisihan lalu top 8 masuk final dengan urutan nilai terkecil ke terbesar.
+                </CardDescription>
+              </CardHeader>
+              <CardContent className="space-y-4">
+                <div className="p-4 bg-amber-50 rounded-2xl border border-amber-200 flex flex-wrap items-center justify-between gap-4">
+                  <div>
+                    <h4 className="font-black text-sm text-amber-950">Jalankan Otomatisasi Cut-Off Babak Final</h4>
+                    <p className="text-xs text-amber-800 mt-0.5">
+                      Sistem akan mengambil 8 atlet dengan nilai tertinggi dari babak penyisihan di Lapangan {selectedArenaConsole}, lalu membentuk partai final yang diurutkan dari nilai terkecil ke terbesar.
+                    </p>
                   </div>
+                  <Button 
+                    onClick={handleRunCutoff} 
+                    className="text-xs font-bold bg-amber-600 hover:bg-amber-700 text-white"
+                  >
+                    <Award className="w-4 h-4 mr-1.5" /> Proses 8 Besar Final Lapangan {selectedArenaConsole}
+                  </Button>
                 </div>
 
-                <div className="p-5 bg-gray-50 rounded-2xl border border-gray-200 space-y-3">
-                  <Badge variant="secondary">ATURAN GRUP PEMULA</Badge>
-                  <h4 className="text-lg font-black text-gray-900">Grup 3 Atlet (Semua Juara)</h4>
-                  <p className="text-xs text-gray-600 leading-relaxed">
-                    Peserta kategori Pemula dibagi rata ke dalam grup berisi 3 atlet. Seluruh peserta mendapatkan medali (Juara 1 Emas, Juara 2 Perak, Juara 3 Perunggu).
-                  </p>
-                  <div className="pt-2">
-                    <label className="block text-xs font-bold text-gray-700 mb-1">Ukuran Grup Pemula</label>
-                    <Input defaultValue="3 Atlet per Grup" disabled className="bg-white font-bold" />
-                  </div>
-                </div>
-              </div>
-
-              <div className="flex justify-end">
-                <Button onClick={() => setAlertMessage('Bagan pertandingan berhasil di-generate ulang!')} className="bg-[#C8102E] font-bold">
-                  <RefreshCw className="h-4 w-4" /> Generate Bagan Pertandingan
-                </Button>
-              </div>
-            </CardContent>
-          </Card>
-        )}
-
-        {/* ============================================================ */}
-        {/* 6. LCD PROYEKTOR LINK */}
-        {/* ============================================================ */}
-        {activeTab === 'lcd' && (
-          <Card>
-            <CardHeader>
-              <CardTitle>Tampilan Layar LCD Proyektor Venue</CardTitle>
-              <CardDescription>Buka tampilan proyektor untuk masing-masing lapangan</CardDescription>
-            </CardHeader>
-            <CardContent className="space-y-4">
-              <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
-                {['A', 'B', 'C'].map((code) => (
-                  <div key={code} className="p-5 bg-gray-50 rounded-2xl border border-gray-200 text-center space-y-3">
-                    <h4 className="text-xl font-black text-gray-900">Lapangan {code}</h4>
-                    <p className="text-xs text-gray-500">Layar LCD Proyektor PSS Arena {code}</p>
-                    <Link href={`/media?arena=${code}`}>
-                      <Button className="w-full bg-[#C8102E] font-bold">
-                        <Monitor className="h-4 w-4" /> Buka Layar Penuh (F11)
+                {/* Pemula Grouping Section */}
+                <div className="p-4 bg-emerald-50 rounded-2xl border border-emerald-200 space-y-4">
+                  <div className="flex flex-wrap items-center justify-between gap-3">
+                    <div>
+                      <h4 className="font-black text-sm text-emerald-950">Pengelompokan Otomatis Kategori Pemula (Pool 3 Orang)</h4>
+                      <p className="text-xs text-emerald-800 mt-0.5">
+                        Sesuai spesifikasi, atlet Festival/Pemula dikelompokkan per 3 orang. Semua atlet dalam grup berhak memperoleh medali (Emas, Perak, Perunggu).
+                      </p>
+                    </div>
+                    <div className="flex items-center gap-2">
+                      <Button
+                        onClick={handleGeneratePemulaPools}
+                        className="text-xs font-bold bg-emerald-700 hover:bg-emerald-800 text-white"
+                      >
+                        <Users className="w-4 h-4 mr-1.5" /> Bentuk Pool Pemula
                       </Button>
-                    </Link>
+                    </div>
                   </div>
-                ))}
-              </div>
-            </CardContent>
-          </Card>
+
+                  {pemulaGroups.length > 0 && (
+                    <div className="space-y-4 pt-2 border-t border-emerald-200">
+                      <div className="flex items-center justify-between">
+                        <span className="text-xs font-bold text-emerald-900">
+                          Terbentuk {pemulaGroups.length} Pool Grup:
+                        </span>
+                        <div className="flex items-center gap-2">
+                          <span className="text-xs text-emerald-800 font-medium">Jadwalkan ke:</span>
+                          {(['A', 'B', 'C'] as const).map(ar => (
+                            <Button
+                              key={ar}
+                              size="sm"
+                              variant="outline"
+                              onClick={() => handleSchedulePemulaPools(ar)}
+                              className="h-7 text-xs font-bold bg-white text-emerald-900 border-emerald-300 hover:bg-emerald-100"
+                            >
+                              Lap {ar}
+                            </Button>
+                          ))}
+                        </div>
+                      </div>
+
+                      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3">
+                        {pemulaGroups.map((grp, gIdx) => (
+                          <div key={gIdx} className="bg-white rounded-xl p-3 border border-emerald-100 shadow-xs space-y-2">
+                            <div className="font-black text-xs text-emerald-900 pb-1 border-b border-gray-100 flex items-center justify-between">
+                              <span>{grp.groupName}</span>
+                              <Badge variant="outline" className="text-[9px] bg-emerald-50 text-emerald-700 border-emerald-200">
+                                {grp.athletes.length} Atlet
+                              </Badge>
+                            </div>
+                            <div className="space-y-1.5 text-xs">
+                              {grp.athletes.map((ath, aIdx) => {
+                                const medalInfo = determinePemulaMedal(aIdx + 1);
+                                return (
+                                  <div key={ath.id} className="flex items-center justify-between bg-gray-50 p-1.5 rounded-lg">
+                                    <div className="min-w-0 pr-2">
+                                      <div className="font-bold text-gray-900 truncate">{ath.name}</div>
+                                      <div className="text-[10px] text-gray-500 truncate">{ath.contingent}</div>
+                                    </div>
+                                    <span className={`text-[10px] font-black px-2 py-0.5 rounded border shrink-0 ${medalInfo.color}`}>
+                                      {medalInfo.medal}
+                                    </span>
+                                  </div>
+                                );
+                              })}
+                            </div>
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                  )}
+                </div>
+              </CardContent>
+            </Card>
+          </div>
         )}
 
         {/* ============================================================ */}
-        {/* 7. KLASEMEN LIVE */}
+        {/* TAB 6: KLASEMEN & REKAPITULASI */}
         {/* ============================================================ */}
-        {activeTab === 'klasemen' && (
-          <Card>
-            <CardHeader className="flex flex-row items-center justify-between">
-              <div>
-                <CardTitle>Klasemen Sementara Real-Time</CardTitle>
-                <CardDescription>Urutan ranking resmi per kategori pertandingan</CardDescription>
-              </div>
-              <Link href="/monitor">
-                <Button variant="outline" size="sm" className="font-bold">
-                  Buka Halaman Monitor Lengkap <ExternalLink className="h-3.5 w-3.5 ml-1" />
-                </Button>
-              </Link>
-            </CardHeader>
-            <CardContent>
-              <div className="border border-gray-200 rounded-2xl overflow-hidden">
-                <table className="w-full text-sm text-left">
-                  <thead className="bg-gray-100 text-gray-700 uppercase font-bold text-xs">
-                    <tr>
-                      <th className="px-4 py-3">Peringkat</th>
-                      <th className="px-4 py-3">Nama Atlet</th>
-                      <th className="px-4 py-3">Kontingen</th>
-                      <th className="px-4 py-3">Akurasi</th>
-                      <th className="px-4 py-3">Presentasi</th>
-                      <th className="px-4 py-3">Total Skor</th>
-                      <th className="px-4 py-3">Status</th>
-                    </tr>
-                  </thead>
-                  <tbody className="divide-y divide-gray-200">
-                    <tr className="bg-amber-50/40 font-semibold">
-                      <td className="px-4 py-3 font-black text-[#C8102E]">#1</td>
-                      <td className="px-4 py-3 font-bold text-gray-900">Ahmad Zaki Kurniawan</td>
-                      <td className="px-4 py-3 text-gray-600">DKI Jakarta</td>
-                      <td className="px-4 py-3 font-mono">3.700</td>
-                      <td className="px-4 py-3 font-mono">4.783</td>
-                      <td className="px-4 py-3 font-black text-[#C8102E]">8.483</td>
-                      <td className="px-4 py-3"><Badge variant="gold">🥇 EMAS (LEADER)</Badge></td>
-                    </tr>
-                    <tr>
-                      <td className="px-4 py-3 font-black text-gray-700">#2</td>
-                      <td className="px-4 py-3 font-bold text-gray-900">Rayhan Bagus Pratama</td>
-                      <td className="px-4 py-3 text-gray-600">Jawa Barat</td>
-                      <td className="px-4 py-3 font-mono">3.650</td>
-                      <td className="px-4 py-3 font-mono">4.700</td>
-                      <td className="px-4 py-3 font-black text-gray-900">8.350</td>
-                      <td className="px-4 py-3"><Badge variant="silver">🥈 PERAK</Badge></td>
-                    </tr>
-                    <tr>
-                      <td className="px-4 py-3 font-black text-gray-700">#3</td>
-                      <td className="px-4 py-3 font-bold text-gray-900">Muhammad Dimas Satria</td>
-                      <td className="px-4 py-3 text-gray-600">Jawa Tengah</td>
-                      <td className="px-4 py-3 font-mono">3.617</td>
-                      <td className="px-4 py-3 font-mono">4.666</td>
-                      <td className="px-4 py-3 font-black text-gray-900">8.283</td>
-                      <td className="px-4 py-3"><Badge variant="bronze">🥉 PERUNGGU</Badge></td>
-                    </tr>
-                  </tbody>
-                </table>
-              </div>
-            </CardContent>
-          </Card>
+        {activeTab === 'rekap' && (
+          <div className="space-y-6">
+            <Card className="border-t-4 border-t-emerald-600">
+              <CardHeader className="pb-3">
+                <div className="flex flex-wrap items-center justify-between gap-3">
+                  <div>
+                    <CardTitle className="text-base flex items-center gap-2">
+                      <BarChart3 className="w-5 h-5 text-emerald-600" />
+                      Klasemen Live & Rekapitulasi Kejuaraan
+                    </CardTitle>
+                    <CardDescription className="text-xs">
+                      Peringkat atlet terkini, cetak lembar nilai resmi bertanda tangan, dan ekspor CSV/Excel.
+                    </CardDescription>
+                  </div>
+                  <div className="flex items-center gap-2">
+                    <Button 
+                      onClick={() => setIsRecapOpen(true)}
+                      className="text-xs font-bold bg-[#C8102E] hover:bg-[#9B0C23] gap-2 px-4 h-9 text-white"
+                    >
+                      <FileSpreadsheet className="w-4 h-4" /> Buka Modal Rekap & Ekspor
+                    </Button>
+                  </div>
+                </div>
+              </CardHeader>
+              <CardContent>
+                <div className="overflow-x-auto">
+                  <table className="w-full text-left text-xs border-collapse">
+                    <thead>
+                      <tr className="border-b border-gray-200 bg-gray-50 text-gray-600 font-bold uppercase text-[10px]">
+                        <th className="py-2.5 px-3">Rank</th>
+                        <th className="py-2.5 px-3">Partai</th>
+                        <th className="py-2.5 px-3">Nama Atlet</th>
+                        <th className="py-2.5 px-3">Kategori</th>
+                        <th className="py-2.5 px-3 text-center">Form 1</th>
+                        <th className="py-2.5 px-3 text-center">Form 2</th>
+                        <th className="py-2.5 px-3 text-center">Skor Akhir</th>
+                        <th className="py-2.5 px-3 text-center">Medali</th>
+                      </tr>
+                    </thead>
+                    <tbody className="divide-y divide-gray-100">
+                      {[...matches].filter(m => (m.final_score ?? 0) > 0).sort((a, b) => (b.final_score ?? 0) - (a.final_score ?? 0)).map((m, idx) => (
+                        <tr key={m.id} className="hover:bg-gray-50">
+                          <td className="py-3 px-3 font-black text-sm">
+                            {idx === 0 && <span className="text-amber-500">🥇 1</span>}
+                            {idx === 1 && <span className="text-slate-400">🥈 2</span>}
+                            {idx === 2 && <span className="text-amber-700">🥉 3</span>}
+                            {idx > 2 && idx + 1}
+                          </td>
+                          <td className="py-3 px-3 font-bold">#{m.match_number} (Lap {m.arena_code})</td>
+                          <td className="py-3 px-3">
+                            <div className="font-bold text-gray-900">{m.athlete?.name}</div>
+                            {m.athlete?.athlete2_name && (
+                              <div className="text-[11px] font-semibold text-rose-600">& {m.athlete.athlete2_name} (Pair)</div>
+                            )}
+                            <div className="text-[10px] text-gray-500">{m.athlete?.contingent}</div>
+                          </td>
+                          <td className="py-3 px-3 font-semibold text-gray-700">{m.category_name}</td>
+                          <td className="py-3 px-3 text-center font-mono">
+                            {m.form1_final_score !== null && m.form1_final_score !== undefined ? m.form1_final_score.toFixed(3) : '-'}
+                          </td>
+                          <td className="py-3 px-3 text-center font-mono">
+                            {m.form2_final_score !== null && m.form2_final_score !== undefined ? m.form2_final_score.toFixed(3) : '-'}
+                          </td>
+                          <td className="py-3 px-3 text-center font-mono font-black text-sm text-[#C8102E]">
+                            {m.final_score !== null && m.final_score !== undefined ? m.final_score.toFixed(3) : '-'}
+                          </td>
+                          <td className="py-3 px-3 text-center">
+                            {idx === 0 && <Badge variant="default" className="bg-amber-400 text-amber-950 font-bold text-[10px]">EMAS</Badge>}
+                            {idx === 1 && <Badge variant="secondary" className="font-bold text-[10px]">PERAK</Badge>}
+                            {idx === 2 && <Badge variant="outline" className="border-amber-700 text-amber-800 font-bold text-[10px]">PERUNGGU</Badge>}
+                            {idx > 2 && <span className="text-gray-400 text-[10px]">-</span>}
+                          </td>
+                        </tr>
+                      ))}
+                      {[...matches].filter(m => (m.final_score ?? 0) > 0).length === 0 && (
+                        <tr>
+                          <td colSpan={8} className="py-8 text-center text-gray-400 italic">
+                            Belum ada skor pertandingan yang masuk.
+                          </td>
+                        </tr>
+                      )}
+                    </tbody>
+                  </table>
+                </div>
+              </CardContent>
+            </Card>
+          </div>
         )}
 
         {/* ============================================================ */}
-        {/* 8. RESET TURNAMEN */}
+        {/* TAB 8: RESET TURNAMEN */}
         {/* ============================================================ */}
         {activeTab === 'reset' && (
-          <Card className="border-red-300 bg-red-50/30">
-            <CardHeader>
-              <CardTitle className="text-red-700 flex items-center gap-2">
-                <AlertTriangle className="h-5 w-5" /> ZONA BAHAYA: RESET TURNAMEN & HAPUS SEMUA NILAI
+          <Card className="border-red-300">
+            <CardHeader className="bg-red-50/50 rounded-t-xl">
+              <CardTitle className="text-base text-red-900 flex items-center gap-2">
+                <AlertTriangle className="h-5 w-5 text-red-600" />
+                Zona Berbahaya: Reset Data Turnamen
               </CardTitle>
-              <CardDescription className="text-red-600">
-                Tindakan ini akan mengosongkan seluruh log skor juri, mengembalikan bagan cut-off ke posisi awal, dan memutuskan seluruh stasiun wasit.
+              <CardDescription className="text-xs text-red-700">
+                Tindakan ini akan mengembalikan seluruh status skor pertandingan ke nol.
               </CardDescription>
             </CardHeader>
-            <CardContent className="space-y-4">
-              <p className="text-sm text-gray-700">
-                Ketik kata <strong>RESET</strong> pada kotak di bawah untuk mengonfirmasi tindakan ini:
-              </p>
-              <div className="max-w-xs space-y-3">
-                <Input 
-                  placeholder="Ketik RESET" 
-                  value={resetInput} 
-                  onChange={(e) => setResetInput(e.target.value)} 
-                  className="font-black text-red-700 uppercase"
+            <CardContent className="space-y-4 pt-4">
+              <div className="p-4 bg-red-50 border border-red-200 rounded-xl text-xs text-red-800 space-y-2">
+                <p className="font-bold">Ketik teks konfirmasi berikut untuk mereset seluruh skor:</p>
+                <p className="font-mono bg-white p-2 rounded border border-red-300 font-black">RESET TURNAMEN SEKARANG</p>
+                <Input
+                  value={resetInput}
+                  onChange={(e) => setResetInput(e.target.value)}
+                  placeholder="Ketik teks konfirmasi di sini..."
+                  className="bg-white text-xs"
                 />
-                <Button 
-                  variant="destructive" 
-                  disabled={resetInput !== 'RESET'} 
-                  onClick={handleResetTournament}
-                  className="w-full font-bold bg-red-700 hover:bg-red-800"
-                >
-                  Konfirmasi & Reset Turnamen
-                </Button>
               </div>
+
+              <Button
+                variant="destructive"
+                disabled={resetInput !== 'RESET TURNAMEN SEKARANG'}
+                onClick={() => {
+                  localStorage.clear();
+                  window.location.reload();
+                }}
+                className="w-full text-xs font-bold"
+              >
+                Reset Seluruh Skor Turnamen
+              </Button>
             </CardContent>
           </Card>
         )}
       </div>
+
+      {/* Recap Modal */}
+      <RecapModal 
+        isOpen={isRecapOpen} 
+        onClose={() => setIsRecapOpen(false)} 
+        matches={matches} 
+        settings={settings} 
+      />
+
+      {/* Import Athletes Modal */}
+      <ImportAthletesModal 
+        isOpen={isImportOpen} 
+        onClose={() => setIsImportOpen(false)} 
+        onSuccess={(count) => setAlertMessage(`Berhasil mengimpor ${count} atlet ke database!`)} 
+      />
     </AdminLayout>
   );
 }
 
 export default function AdminPage() {
   return (
-    <Suspense fallback={<div className="p-8 font-bold">Memuat Pusat Kendali Admin...</div>}>
+    <Suspense fallback={<div className="p-6 text-xs text-gray-500">Memuat Pusat Kendali Admin...</div>}>
       <AdminContent />
     </Suspense>
   );

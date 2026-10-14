@@ -1,12 +1,40 @@
-import { type NextRequest } from 'next/server';
-import { updateSession } from '@/lib/supabase/middleware';
+import { type NextRequest, NextResponse } from 'next/server';
 
 export async function middleware(request: NextRequest) {
-  return await updateSession(request);
+  const path = request.nextUrl.pathname;
+
+  // Session cookies
+  const adminSession = request.cookies.get('admin_session')?.value;
+  const operatorSession = request.cookies.get('operator_session')?.value;
+  const judgeSession = request.cookies.get('judge_session')?.value;
+  const monitorSession = request.cookies.get('monitor_session')?.value;
+
+  // RBAC route protection
+  if (path.startsWith('/admin')) {
+    if (!adminSession) {
+      return NextResponse.redirect(new URL('/login', request.url));
+    }
+  }
+
+  if (path.startsWith('/operator')) {
+    if (!operatorSession && !adminSession) {
+      return NextResponse.redirect(new URL('/login', request.url));
+    }
+  }
+
+  if (path.startsWith('/juri')) {
+    if (!judgeSession && !adminSession) {
+      return NextResponse.redirect(new URL('/login', request.url));
+    }
+  }
+
+  return NextResponse.next();
 }
 
 export const config = {
   matcher: [
-    '/((?!_next/static|_next/image|favicon.ico|.*\\.(?:svg|png|jpg|jpeg|gif|webp)$).*)',
+    '/admin/:path*',
+    '/operator/:path*',
+    '/juri/:path*',
   ],
 };
